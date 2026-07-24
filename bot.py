@@ -137,6 +137,23 @@ def process_final(message):
         
     user_applications.pop(user_id, None)
 
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"OK")
+
+def run_health_check():
+    port = int(os.getenv("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    server.serve_forever()
+
 if __name__ == '__main__':
+    # Запуск фонового веб-сервера для Render
+    threading.Thread(target=run_health_check, daemon=True).start()
+
     print("Бот проекта BEST RUSSIA запущен...")
     bot.infinity_polling()
