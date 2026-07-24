@@ -4,7 +4,7 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemo
 
 # --- НАСТРОЙКИ БЕЗОПАСНОСТИ И ПОДКЛЮЧЕНИЯ ---
 # Ваши данные успешно интегрированы в переменные по умолчанию
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8957594048:AAEmSxKbnZBchUXQ8UphJ86HxqDJa7_FpJw")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8957594048:AAEgctfsZve38fv6CwPOXILf3UqI9Gq2WbQ")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "8915047087") 
 
 bot = telebot.TeleBot(BOT_TOKEN)
