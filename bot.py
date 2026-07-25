@@ -1,7 +1,6 @@
 import os
 import logging
 import threading
-import sqlite3
 from flask import Flask
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
@@ -12,60 +11,45 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8957594048:AAEgctfsZve38fv6CwPOXILf3UqI9Gq2W
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "8915047087")
 
 bot = telebot.TeleBot(BOT_TOKEN)
-DB_FILE = ":memory:"
 
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute('CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS blacklist (user_id INTEGER PRIMARY KEY)')
-    cursor.execute('CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value INTEGER)')
-    cursor.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('total_apps', 0)")
-    cursor.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('accepted_apps', 0)")
-    cursor.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('recruitment_open', 1)")
-    conn.commit()
-    conn.close()
-
-init_db()
+# Вместо БД используем списки в оперативной памяти (сбрасываются при перезапуске бота)
+active_users = set()  # Хранит ID всех, кто нажал /start (для рассылки)
+recruitment_open = True  # Статус набора (True - открыт, False - закрыт)
 user_applications = {}
 admin_states = {}
 
-def db_query(query, params=(), fetchone=False, fetchall=False, commit=False):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute(query, params)
-    result = cursor.fetchone() if fetchone else (cursor.fetchall() if fetchall else None)
-    if commit: conn.commit()
-    conn.close()
-    return result
-
+# --- ВЕБ-СЕРВЕР FLASK ДЛЯ RENDER ---
 app = Flask(__name__)
 @app.route('/')
-def home(): return "Бот BEST RUSSIA активен!", 200
+def home(): return "Бот BEST RUSSIA онлайн!", 200
 
 def run_flask():
     port = int(os.getenv("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
+# --- ЛОГИКА АДМИН-ПАНЕЛИ (КОМАНДА /admin) ---
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     if str(message.chat.id) != str(ADMIN_CHAT_ID): return
-    total_users = db_query("SELECT COUNT(*) FROM users", fetchone=True)[0]
-    total_apps = db_query("SELECT value FROM stats WHERE key = 'total_apps'", fetchone=True)[0]
-    accepted = db_query("SELECT value FROM stats WHERE key = 'accepted_apps'", fetchone=True)[0]
-    is_open = db_query("SELECT value FROM stats WHERE key = 'recruitment_open'", fetchone=True)[0]
-    status_recruitment = "🟢 ОТКРЫТ" if is_open == 1 else "🔴 ЗАКРЫТ"
+    status_recruitment = "🟢 ОТКРЫТ" if recruitment_open else "🔴 ЗАКРЫТ"
     
-    admin_text = f"👑 **ПАНЕЛЬ УПРАВЛЕНИЯ BEST RUSSIA** 👑\n\n👥 Пользователей в боте: `{total_users}`\n📊 Подано заявок: `{total_apps}` (Одобрено: `{accepted}`)\n⚙️ Прием анкет сейчас: **{status_recruitment}**"
-    markup = InlineKeyboardMarkup(row_width=2)
-    markup.add(InlineKeyboardButton("📢 Рассылка", callback_data="admin_broadcast"), InlineKeyboardButton("🚫 ЧС / Бан", callback_data="admin_blacklist_menu"), InlineKeyboardButton("🔒 Вкл/Выкл Набор", callback_data="admin_toggle_recruitment"), InlineKeyboardButton("💾 Скачать Архив", callback_data="admin_download_db"))
+    admin_text = (
+        "👑 **ПАНЕЛЬ УПРАВЛЕНИЯ BEST RUSSIA** 👑\n\n"
+        f"👥 Пользователей в кэше для рассылки: `{len(active_users)}`\n"
+        f"⚙️ Прием анкет сейчас: **{status_recruitment}**\n\n"
+        "Выберите действие на панели ниже:"
+    )
+    markup = InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        InlineKeyboardButton("📢 Рассылка сообщений", callback_data="admin_broadcast"),
+        InlineKeyboardButton("🔒 Вкл/Выкл Набор хелперов", callback_data="admin_toggle_recruitment")
+    )
     bot.send_message(message.chat.id, admin_text, parse_mode="Markdown", reply_markup=markup)
 
+# --- ЛОГИКА ПОЛЬЗОВАТЕЛЕЙ ---
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    is_banned = db_query("SELECT 1 FROM blacklist WHERE user_id = ?", (message.from_user.id,), fetchone=True)
-    if is_banned: return
-    db_query("INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)", (message.from_user.id, message.from_user.username), commit=True)
+    active_users.add(message.from_user.id)  # Запоминаем пользователя для рассылки
     
     welcome_text = "✨ **Добро пожаловать в систему подачи заявок проекта BEST RUSSIA!** ✨\n\nВыберите интересующую вас вакансию ниже."
     markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
@@ -74,10 +58,7 @@ def send_welcome(message):
 
 @bot.message_handler(func=lambda msg: msg.text in ["Подать на Хелпера 📝", "Подать на Агента Discord 🛠️"])
 def start_application(message):
-    is_banned = db_query("SELECT 1 FROM blacklist WHERE user_id = ?", (message.from_user.id,), fetchone=True)
-    if is_banned: return
-    is_open = db_query("SELECT value FROM stats WHERE key = 'recruitment_open'", fetchone=True)[0]
-    if is_open == 0:
+    if not recruitment_open:
         bot.send_message(message.chat.id, "🔒 **Извините, сейчас прием заявок временно закрыт администрацией.**", parse_mode="Markdown")
         return
     chosen_role = "Хелпер" if "Хелпера" in message.text else "Агент поддержки Discord"
@@ -127,37 +108,64 @@ def process_final(message):
     if user_id not in user_applications: return
     if message.text == "Отправить заявку ✅":
         data = user_applications[user_id]
-        db_query("UPDATE stats SET value = value + 1 WHERE key = 'total_apps'", commit=True)
         emoji = "🚀" if data['role'] == "Хелпер" else "🎮"
         admin_message = f"{emoji} **НОВАЯ ЗАЯВКА | {data['role'].upper()}** {emoji}\n\n👤 **Кандидат:** {data['username']} (ID: `{data['user_id']}`)\n🔞 **Возраст:** {data['age']}\n🕒 **Готов уделять:** {data['time']}\n💼 **Опыт работы:**\n{data['experience']}"
         inline_markup = InlineKeyboardMarkup()
         inline_markup.row(InlineKeyboardButton("Одобрить ✅", callback_data=f"accept_{data['user_id']}"), InlineKeyboardButton("Отклонить ❌", callback_data=f"decline_{data['user_id']}"))
-        inline_markup.row(InlineKeyboardButton("🛑 Забанить спамера", callback_data=f"ban_{data['user_id']}"))
         bot.send_message(ADMIN_CHAT_ID, admin_message, parse_mode="Markdown", reply_markup=inline_markup)
         bot.send_message(message.chat.id, "🎉 **Ваша заявка успешно отправлена!**", parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
     else:
         bot.send_message(message.chat.id, "❌ Заполнение отменено.", reply_markup=ReplyKeyboardRemove())
     user_applications.pop(user_id, None)
 
+# --- ОБРАБОТКА ИНЛАЙН КНОПОК РЕШЕНИЯ ---
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
+    global recruitment_open
     if str(call.message.chat.id) != str(ADMIN_CHAT_ID): return
+    
     if call.data.startswith('accept_') or call.data.startswith('decline_'):
         action, target_user_id = call.data.split('_')
         if action == "accept":
             status_text = "🟢 ОДОБРЕНО АДМИНИСТРАЦИЕЙ"
             user_notification = "🎉 **Поздравляем! Ваша заявка одобрена.** С вами скоро свяжутся."
-            db_query("UPDATE stats SET value = value + 1 WHERE key = 'accepted_apps'", commit=True)
         else:
             status_text = "🔴 ОТКЛОНЕНО АДМИНИСТРАЦИЕЙ"
             user_notification = "❌ **К сожалению, ваша заявка была отклонена.**"
         try: bot.send_message(target_user_id, user_notification, parse_mode="Markdown")
         except Exception: pass
         bot.edit_message_text(chat_id=ADMIN_CHAT_ID, message_id=call.message.message_id, text=call.message.text + f"\n\n👉 **Решение:** {status_text}", reply_markup=None)
-    elif call.data.startswith('ban_'):
-        target_id = call.data.split('_')[1]
-        db_query("INSERT OR IGNORE INTO blacklist (user_id) VALUES (?)", (target_id,), commit=True)
-        bot.answer_callback_query(call.id, "Пользователь забанен!", show_alert=True)
-        bot.edit_message_reply_markup(chat_id=ADMIN_CHAT_ID, message_id=call.message.message_id, reply_markup=None)
+    
     elif call.data == "admin_broadcast":
         bot.send_message(ADMIN_CHAT_ID, "📢 Введите текст для массовой рассылки всем (или напишите 'отмена'):")
+        admin_states[ADMIN_CHAT_ID] = "waiting_broadcast"
+    
+    elif call.data == "admin_toggle_recruitment":
+        recruitment_open = not recruitment_open
+        status_word = "ОТКРЫТ 🟢" if recruitment_open else "ЗАКРЫТ 🔴"
+        bot.answer_callback_query(call.id, f"Статус набора изменен на: {status_word}", show_alert=True)
+        admin_panel(call.message)
+
+# --- ОБРАБОТКА ТЕКСТА РАССЫЛКИ ---
+@bot.message_handler(func=lambda msg: str(msg.chat.id) == str(ADMIN_CHAT_ID) and msg.chat.id in admin_states)
+def handle_admin_inputs(message):
+    state = admin_states[message.chat.id]
+    text = message.text.strip()
+    if text.lower() == 'отмена':
+        bot.send_message(ADMIN_CHAT_ID, "❌ Действие отменено.")
+        admin_states.pop(message.chat.id, None)
+        return
+    if state == "waiting_broadcast":
+        bot.send_message(ADMIN_CHAT_ID, f"🚀 Начинаю рассылку для {len(active_users)} человек...")
+        success = 0
+        for u in active_users:
+            try:
+                bot.send_message(u, text, parse_mode="Markdown")
+                success += 1
+            except Exception: pass
+        bot.send_message(ADMIN_CHAT_ID, f"📊 Рассылка завершена! Успешно доставлено: `{success}`")
+        admin_states.pop(message.chat.id, None)
+
+if __name__ == '__main__':
+    threading.Thread(target=run_flask, daemon=True).start()
+    bot.infinity_polling()
