@@ -1,6 +1,7 @@
 import os
 import logging
 import threading
+import sqlite3
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
@@ -9,19 +10,64 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemo
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- НАСТРОЙКИ БЕЗОПАСНОСТИ И ПОДКЛЮЧЕНИЯ ---
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8957594048:AAEgctfsZve38fv6CwPOXILf3UqI9Gq2WbQ")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8957594048:AAEmSxKbnZBchUXQ8UphJ86HxqDJa7_FpJw")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "8915047087") 
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Временное хранилище для анкет в памяти
-user_applications = {}
+# --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ (SQLite) ---
+DB_FILE = "best_russia.db"
 
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    # Таблица пользователей для рассылки
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT)''')
+    # Таблица черного списка
+    cursor.execute('''CREATE TABLE IF NOT EXISTS blacklist (user_id INTEGER PRIMARY KEY)''')
+    # Таблица заявок и настроек системы
+    cursor.execute('''CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value INTEGER)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS apps_archive (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, role TEXT, age TEXT, experience TEXT, status TEXT)''')
+    
+    # Дефолтные настройки
+    cursor.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('total_apps', 0)")
+    cursor.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('accepted_apps', 0)")
+    cursor.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('declined_apps', 0)")
+    cursor.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('recruitment_open', 1)") # 1 - Открыт, 0 - Закрыт
+    
+    conn.commit()
+    conn.close()
+
+init_db()
+
+# Временное хранилище для процесса заполнения анкет в оперативной памяти
+user_applications = {}
+# Состояния админки для ожидания текста рассылки или ID для бана
+admin_states = {}
+
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
 def clean_input(text: str) -> str:
-    """Очистка ввода от опасных символов и лишних пробелов для безопасности."""
-    if not text:
-        return ""
+    if not text: return ""
     return text.strip()[:500]
+
+def db_query(query, params=(), fetchone=False, fetchall=False, commit=False):
+    """Безопасная работа с БД с автоматическим закрытием соединения."""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute(query, params)
+    result = None
+    if fetchone: result = cursor.fetchone()
+    elif fetchall: result = cursor.fetchall()
+    if commit: conn.commit()
+    conn.close()
+    return result
+
+def is_banned(user_id):
+    res = db_query("SELECT 1 FROM blacklist WHERE user_id = ?", (user_id,), fetchone=True)
+    return res is not None
+
+def register_user(user_id, username):
+    db_query("INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)", (user_id, username), commit=True)
 
 # --- Фоновый веб-сервер для Render ---
 class HealthCheckHandler(BaseHTTPRequestHandler):
@@ -29,18 +75,50 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"OK")
-    def log_message(self, format, *args):
-        return  # Отключаем спам-логи веб-сервера
+    def log_message(self, format, *args): return
 
 def run_health_check():
     port = int(os.getenv("PORT", 10000))
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-    logging.info(f"Фоновый веб-сервер запущен на порту {port}")
     server.serve_forever()
 
-# --- ЛОГИКА БОТА ---
+# --- ЛОГИКА АДМИН-ПАНЕЛИ (ТОЛЬКО ДЛЯ ВАС) ---
+@bot.message_handler(commands=['admin'])
+def admin_panel(message):
+    if str(message.chat.id) != str(ADMIN_CHAT_ID):
+        return
+
+    # Загружаем актуальную статистику
+    total_users = db_query("SELECT COUNT(*) FROM users", fetchone=True)[0]
+    total_apps = db_query("SELECT value FROM stats WHERE key = 'total_apps'", fetchone=True)[0]
+    accepted = db_query("SELECT value FROM stats WHERE key = 'accepted_apps'", fetchone=True)[0]
+    is_open = db_query("SELECT value FROM stats WHERE key = 'recruitment_open'", fetchone=True)[0]
+    
+    status_recruitment = "🟢 ОТКРЫТ" if is_open == 1 else "🔴 ЗАКРЫТ"
+
+    admin_text = (
+        "👑 **ПАНЕЛЬ УПРАВЛЕНИЯ BEST RUSSIA** 👑\n\n"
+        f"👥 Всего пользователей в боте: `{total_users}`\n"
+        f"📊 Всего подано заявок: `{total_apps}` (Одобрено: `{accepted}`)\n"
+        f"⚙️ Прием анкет сейчас: **{status_recruitment}**\n\n"
+        "Выберите действие на панели ниже:"
+    )
+
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("📢 Рассылка", callback_data="admin_broadcast"),
+        InlineKeyboardButton("🚫 ЧС / Бан", callback_data="admin_blacklist_menu"),
+        InlineKeyboardButton("🔒 Вкл/Выкл Набор", callback_data="admin_toggle_recruitment"),
+        InlineKeyboardButton("💾 Скачать Архив", callback_data="admin_download_db")
+    )
+    bot.send_message(message.chat.id, admin_text, parse_mode="Markdown", reply_markup=markup)
+
+# --- ЛОГИКА ПОЛЬЗОВАТЕЛЕЙ ---
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
+    if is_banned(message.from_user.id): return
+    register_user(message.from_user.id, message.from_user.username)
+
     welcome_text = (
         "✨ **Добро пожаловать в систему подачи заявок проекта BEST RUSSIA!** ✨\n\n"
         "Выберите интересующую вас вакансию ниже, чтобы начать заполнение анкеты."
@@ -53,8 +131,14 @@ def send_welcome(message):
 @bot.message_handler(func=lambda msg: msg.text in ["Подать на Хелпера 📝", "Подать на Агента Discord 🛠️"])
 def start_application(message):
     user_id = message.from_user.id
+    if is_banned(user_id): return
+
+    # Проверка, открыт ли набор администрацией
+    is_open = db_query("SELECT value FROM stats WHERE key = 'recruitment_open'", fetchone=True)[0]
+    if is_open == 0:
+        bot.send_message(message.chat.id, "🔒 **Извините, но в данный момент прием заявок временно закрыт администрацией проекта.**", parse_mode="Markdown")
+        return
     
-    # Определяем выбранную роль
     chosen_role = "Хелпер" if "Хелпера" in message.text else "Агент поддержки Discord"
     min_age = 12 if chosen_role == "Хелпер" else 15
     
@@ -65,13 +149,7 @@ def start_application(message):
         "min_age": min_age
     }
     
-    bot.send_message(
-        message.chat.id, 
-        f"Вы выбрали направление: **{chosen_role}**.\n\n"
-        f"Шаг 1. Укажите ваш **реальный возраст** (цифрой, минимум {min_age} лет):", 
-        parse_mode="Markdown", 
-        reply_markup=ReplyKeyboardRemove()
-    )
+    bot.send_message(message.chat.id, f"Вы выбрали: **{chosen_role}**.\n\nШаг 1. Укажите ваш **реальный возраст** (цифрой, минимум {min_age} лет):", parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
     bot.register_next_step_handler(message, process_age)
 
 def process_age(message):
@@ -81,21 +159,13 @@ def process_age(message):
     text = clean_input(message.text)
     min_role_age = user_applications[user_id]["min_age"]
     
-    # Динамическая проверка возраста под каждую роль
     if not text.isdigit() or not (min_role_age <= int(text) <= 60):
-        bot.send_message(
-            message.chat.id, 
-            f"⚠️ Пожалуйста, введите корректный возраст цифрами (для этой должности требуется возраст от {min_role_age} до 60 лет):"
-        )
+        bot.send_message(message.chat.id, f"⚠️ Недостаточный возраст или неверный формат. Требуется возраст от {min_role_age} до 60 лет. Повторите ввод:")
         bot.register_next_step_handler(message, process_age)
         return
 
     user_applications[user_id]["age"] = text
-    bot.send_message(
-        message.chat.id, 
-        "Шаг 2. Расскажите о вашем **опыте работы** на аналогичных проектах/серверах (где были, какие обязанности выполняли):", 
-        parse_mode="Markdown"
-    )
+    bot.send_message(message.chat.id, "Шаг 2. Расскажите о вашем **опыте работы** на аналогичных проектах/серверах (минимум 10 символов):", parse_mode="Markdown")
     bot.register_next_step_handler(message, process_experience)
 
 def process_experience(message):
@@ -104,7 +174,7 @@ def process_experience(message):
 
     text = clean_input(message.text)
     if len(text) < 10:
-        bot.send_message(message.chat.id, "⚠️ Опишите ваш опыт подробнее для лучшего шанса (минимум 10 символов):")
+        bot.send_message(message.chat.id, "⚠️ Опишите ваш опыт подробнее (минимум 10 символов):")
         bot.register_next_step_handler(message, process_experience)
         return
 
@@ -139,7 +209,11 @@ def process_final(message):
     if message.text == "Отправить заявку ✅":
         data = user_applications[user_id]
         
-        # Меняем заголовок карточки в зависимости от должности
+        # Обновляем глобальную статистику в БД
+        db_query("UPDATE stats SET value = value + 1 WHERE key = 'total_apps'", commit=True)
+        db_query("INSERT INTO apps_archive (user_id, role, age, experience, status) VALUES (?, ?, ?, ?, 'На рассмотрении')", 
+                 (data['user_id'], data['role'], data['age'], data['experience']), commit=True)
+
         emoji = "🚀" if data['role'] == "Хелпер" else "🎮"
         admin_message = (
             f"{emoji} **НОВАЯ ЗАЯВКА | {data['role'].upper()}** {emoji}\n\n"
@@ -149,63 +223,5 @@ def process_final(message):
             f"💼 **Опыт работы:**\n{data['experience']}\n"
         )
         
-        # Инлайн-кнопки решения для администратора
         inline_markup = InlineKeyboardMarkup()
         inline_markup.add(
-            InlineKeyboardButton("Одобрить ✅", callback_data=f"accept_{data['user_id']}_{data['role']}"),
-            InlineKeyboardButton("Отклонить ❌", callback_data=f"decline_{data['user_id']}_{data['role']}")
-        )
-        
-        try:
-            bot.send_message(ADMIN_CHAT_ID, admin_message, parse_mode="Markdown", reply_markup=inline_markup)
-            bot.send_message(
-                message.chat.id, 
-                f"🎉 **Ваша заявка на должность {data['role']} успешно отправлена!** Администрация проекта BEST RUSSIA рассмотрит её в ближайшее время.", 
-                parse_mode="Markdown", 
-                reply_markup=ReplyKeyboardRemove()
-            )
-            logging.info(f"Заявка от {user_id} на должность {data['role']} отправлена в админ-чат.")
-        except Exception as e:
-            bot.send_message(message.chat.id, "❌ Произошла ошибка при отправке. Пожалуйста, обратитесь к создателю проекта.")
-            logging.error(f"Ошибка отправки админу: {e}")
-    else:
-        bot.send_message(message.chat.id, "❌ Заполнение анкеты отменено. Вы можете начать заново, написав /start.", reply_markup=ReplyKeyboardRemove())
-        
-    user_applications.pop(user_id, None)
-
-# --- ОБРАБОТКА КНОПОК АДМИНИСТРАТОРА ---
-@bot.callback_query_handler(func=lambda call: call.data.startswith('accept_') or call.data.startswith('decline_'))
-def handle_admin_decision(call):
-    if str(call.message.chat.id) != str(ADMIN_CHAT_ID):
-        bot.answer_callback_query(call.id, "⚠️ Вы не являетесь администратором!", show_alert=True)
-        return
-
-    # Разбиваем данные из кнопки: действие, ID кандидата и название роли
-    parts = call.data.split('_')
-    action = parts[0]
-    target_user_id = parts[1]
-    role_name = parts[2]
-    
-    if action == "accept":
-        status_text = "🟢 **ОДОБРЕНО АДМИНИСТРАЦИЕЙ**"
-        user_notification = f"🎉 **Поздравляем! Ваша заявка на должность '{role_name}' проекта BEST RUSSIA одобрена.** Администратор свяжется с вами в ближайшее время."
-    else:
-        status_text = "🔴 **ОТКЛОНЕНО АДМИНИСТРАЦИЕЙ**"
-        user_notification = f"❌ **К сожалению, ваша заявка на должность '{role_name}' была отклонена.** Вы можете попробовать снова позже."
-
-    # Отправляем уведомление кандидату
-    try:
-        bot.send_message(target_user_id, user_notification, parse_mode="Markdown")
-        bot.answer_callback_query(call.id, "Кандидат успешно уведомлен!")
-    except Exception as e:
-        bot.answer_callback_query(call.id, "⚠️ Не удалось отправить сообщение кандидату (бот заблокирован).", show_alert=True)
-        logging.warning(f"Не удалось уведомить пользователя {target_user_id}: {e}")
-
-    # Обновляем сообщение в админ-чате
-    updated_text = call.message.text + f"\n\n👉 **Вердикт:** {status_text}"
-    bot.edit_message_text(chat_id=ADMIN_CHAT_ID, message_id=call.message.message_id, text=updated_text, reply_markup=None)
-
-if __name__ == '__main__':
-    threading.Thread(target=run_health_check, daemon=True).start()
-    logging.info("Бот проекта BEST RUSSIA запускается...")
-    bot.infinity_polling()
