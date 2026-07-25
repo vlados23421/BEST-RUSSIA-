@@ -7,16 +7,22 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemo
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8957594048:AAEliVZQVUhQLgX6i0e1OkxZM1JjBCQVviA")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8957594048:AAEgctfsZve38fv6CwPOXILf3UqI9Gq2WbQ")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "8915047087")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Вместо БД используем списки в оперативной памяти (сбрасываются при перезапуске бота)
-active_users = set()  # Хранит ID всех, кто нажал /start (для рассылки)
-recruitment_open = True  # Статус набора (True - открыт, False - закрыт)
+# Настройки в оперативной памяти (сбрасываются при перезапуске сервера Render)
+active_users = set()  
+recruitment_open = True  
 user_applications = {}
 admin_states = {}
+
+# Глобальные настройки минимального возраста (можно менять из админки)
+age_limits = {
+    "helper": 12,
+    "discord": 15
+}
 
 # --- ВЕБ-СЕРВЕР FLASK ДЛЯ RENDER ---
 app = Flask(__name__)
@@ -36,20 +42,22 @@ def admin_panel(message):
     admin_text = (
         "👑 **ПАНЕЛЬ УПРАВЛЕНИЯ BEST RUSSIA** 👑\n\n"
         f"👥 Пользователей в кэше для рассылки: `{len(active_users)}`\n"
-        f"⚙️ Прием анкет сейчас: **{status_recruitment}**\n\n"
+        f"⚙️ Прием анкет сейчас: **{status_recruitment}**\n"
+        f"🔞 Ограничения: Хелпер [**{age_limits['helper']}+**] | Discord [**{age_limits['discord']}+**]\n\n"
         "Выберите действие на панели ниже:"
     )
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(
         InlineKeyboardButton("📢 Рассылка сообщений", callback_data="admin_broadcast"),
-        InlineKeyboardButton("🔒 Вкл/Выкл Набор хелперов", callback_data="admin_toggle_recruitment")
+        InlineKeyboardButton("🔒 Вкл/Выкл Набор хелперов", callback_data="admin_toggle_recruitment"),
+        InlineKeyboardButton("🔞 Изменить Возраст для подачи", callback_data="admin_change_age_menu")
     )
     bot.send_message(message.chat.id, admin_text, parse_mode="Markdown", reply_markup=markup)
 
 # --- ЛОГИКА ПОЛЬЗОВАТЕЛЕЙ ---
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    active_users.add(message.from_user.id)  # Запоминаем пользователя для рассылки
+    active_users.add(message.from_user.id)  
     
     welcome_text = "✨ **Добро пожаловать в систему подачи заявок проекта BEST RUSSIA!** ✨\n\nВыберите интересующую вас вакансию ниже."
     markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
@@ -61,9 +69,17 @@ def start_application(message):
     if not recruitment_open:
         bot.send_message(message.chat.id, "🔒 **Извините, сейчас прием заявок временно закрыт администрацией.**", parse_mode="Markdown")
         return
+    
     chosen_role = "Хелпер" if "Хелпера" in message.text else "Агент поддержки Discord"
-    min_age = 12 if chosen_role == "Хелпер" else 15
-    user_applications[message.from_user.id] = {"username": f"@{message.from_user.username}" if message.from_user.username else "Скрыт", "user_id": message.from_user.id, "role": chosen_role, "min_age": min_age}
+    # Берем возраст из наших динамических настроек
+    min_age = age_limits["helper"] if chosen_role == "Хелпер" else age_limits["discord"]
+    
+    user_applications[message.from_user.id] = {
+        "username": f"@{message.from_user.username}" if message.from_user.username else "Скрыт", 
+        "user_id": message.from_user.id, 
+        "role": chosen_role, 
+        "min_age": min_age
+    }
     bot.send_message(message.chat.id, f"Вы выбрали: **{chosen_role}**.\n\nШаг 1. Укажите ваш **реальный возраст** (цифрой, минимум {min_age} лет):", parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
     bot.register_next_step_handler(message, process_age)
 
@@ -113,12 +129,12 @@ def process_final(message):
         inline_markup = InlineKeyboardMarkup()
         inline_markup.row(InlineKeyboardButton("Одобрить ✅", callback_data=f"accept_{data['user_id']}"), InlineKeyboardButton("Отклонить ❌", callback_data=f"decline_{data['user_id']}"))
         bot.send_message(ADMIN_CHAT_ID, admin_message, parse_mode="Markdown", reply_markup=inline_markup)
-        bot.send_message(message.chat.id, "🎉 **Ваша заявка успешно отправлена!**", parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
+        bot.send_message(message.chat.id, "🎉 **Ваша заявка успешно отправлена!** Администрация проекта BEST RUSSIA рассмотрит её в ближайшее время.", parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
     else:
         bot.send_message(message.chat.id, "❌ Заполнение отменено.", reply_markup=ReplyKeyboardRemove())
     user_applications.pop(user_id, None)
 
-# --- ОБРАБОТКА ИНЛАЙН КНОПОК РЕШЕНИЯ ---
+# --- ОБРАБОТКА ИНЛАЙН КНОПОК ---
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     global recruitment_open
@@ -146,26 +162,32 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, f"Статус набора изменен на: {status_word}", show_alert=True)
         admin_panel(call.message)
 
-# --- ОБРАБОТКА ТЕКСТА РАССЫЛКИ ---
+    elif call.data == "admin_change_age_menu":
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("Изменить для Хелперов 🚀", callback_data="set_age_helper"),
+            InlineKeyboardButton("Изменить для Discord 🎮", callback_data="set_age_discord")
+        )
+        bot.send_message(ADMIN_CHAT_ID, "Какую должность настраиваем?", reply_markup=markup)
+        bot.answer_callback_query(call.id)
+
+    elif call.data in ["set_age_helper", "set_age_discord"]:
+        role_key = "helper" if "helper" in call.data else "discord"
+        bot.send_message(ADMIN_CHAT_ID, f"🔢 Введите **новый минимальный возраст** для этой должности цифрой (или напишите 'отмена'):")
+        admin_states[ADMIN_CHAT_ID] = f"waiting_age_{role_key}"
+        bot.answer_callback_query(call.id)
+
+# --- ОБРАБОТКА ТЕКСТА РАССЫЛКИ И ВВОДА ВОЗРАСТА ---
 @bot.message_handler(func=lambda msg: str(msg.chat.id) == str(ADMIN_CHAT_ID) and msg.chat.id in admin_states)
 def handle_admin_inputs(message):
     state = admin_states[message.chat.id]
     text = message.text.strip()
+    
     if text.lower() == 'отмена':
         bot.send_message(ADMIN_CHAT_ID, "❌ Действие отменено.")
         admin_states.pop(message.chat.id, None)
         return
+        
     if state == "waiting_broadcast":
         bot.send_message(ADMIN_CHAT_ID, f"🚀 Начинаю рассылку для {len(active_users)} человек...")
         success = 0
-        for u in active_users:
-            try:
-                bot.send_message(u, text, parse_mode="Markdown")
-                success += 1
-            except Exception: pass
-        bot.send_message(ADMIN_CHAT_ID, f"📊 Рассылка завершена! Успешно доставлено: `{success}`")
-        admin_states.pop(message.chat.id, None)
-
-if __name__ == '__main__':
-    threading.Thread(target=run_flask, daemon=True).start()
-    bot.infinity_polling()
