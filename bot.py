@@ -220,5 +220,4 @@ def process_final(message):
         )
         inline_markup.row(InlineKeyboardButton("🛑 Забанить спамера", callback_data=f"ban_{data['user_id']}"))
         
-        try:
-            bot.send_message(ADMIN_CHAT_ID, admin_message, parse_mode="Markdown", reply_markup=inline_markup)
+        bot.send_message(ADMIN_CHAT_ID, admin_message, parse_mode="Markdown", reply_markup=inline_markup)
