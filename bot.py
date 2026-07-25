@@ -7,7 +7,7 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemo
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8957594048:AAEgctfsZve38fv6CwPOXILf3UqI9Gq2WbQ")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8957594048:AAEliVZQVUhQLgX6i0e1OkxZM1JjBCQVviA")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "8915047087")
 
 bot = telebot.TeleBot(BOT_TOKEN)
