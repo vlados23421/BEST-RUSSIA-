@@ -2,7 +2,7 @@ import os
 import logging
 import threading
 import sqlite3
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from flask import Flask
 import telebot
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -62,18 +62,19 @@ def is_banned(user_id):
 def register_user(user_id, username):
     db_query("INSERT OR IGNORE INTO users (user_id, username) VALUES (?, ?)", (user_id, username), commit=True)
 
-# --- Фоновый веб-сервер для Render ---
-class HealthCheckHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"OK")
-    def log_message(self, format, *args): return
+# --- ВЕБ-СЕРВЕР FLASK ДЛЯ RENDER ---
+app = Flask(__name__)
 
-def run_health_check():
+@app.route('/')
+def home():
+    return "Бот BEST RUSSIA активен и работает!", 200
+
+def run_flask():
     port = int(os.getenv("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
-    server.serve_forever()
+    # Отключаем логи Flask, чтобы не спамить в консоль
+    log = logging.getLogger('wsgi')
+    log.setLevel(logging.ERROR)
+    app.run(host='0.0.0.0', port=port)
 
 # --- ЛОГИКА АДМИН-ПАНЕЛИ ---
 @bot.message_handler(commands=['admin'])
@@ -81,10 +82,10 @@ def admin_panel(message):
     if str(message.chat.id) != str(ADMIN_CHAT_ID):
         return
 
-    total_users = db_query("SELECT COUNT(*) FROM users", fetchone=True)
-    total_apps = db_query("SELECT value FROM stats WHERE key = 'total_apps'", fetchone=True)
-    accepted = db_query("SELECT value FROM stats WHERE key = 'accepted_apps'", fetchone=True)
-    is_open = db_query("SELECT value FROM stats WHERE key = 'recruitment_open'", fetchone=True)
+    total_users = db_query("SELECT COUNT(*) FROM users", fetchone=True)[0]
+    total_apps = db_query("SELECT value FROM stats WHERE key = 'total_apps'", fetchone=True)[0]
+    accepted = db_query("SELECT value FROM stats WHERE key = 'accepted_apps'", fetchone=True)[0]
+    is_open = db_query("SELECT value FROM stats WHERE key = 'recruitment_open'", fetchone=True)[0]
     
     status_recruitment = "🟢 ОТКРЫТ" if is_open == 1 else "🔴 ЗАКРЫТ"
 
@@ -125,7 +126,7 @@ def start_application(message):
     user_id = message.from_user.id
     if is_banned(user_id): return
 
-    is_open = db_query("SELECT value FROM stats WHERE key = 'recruitment_open'", fetchone=True)
+    is_open = db_query("SELECT value FROM stats WHERE key = 'recruitment_open'", fetchone=True)[0]
     if is_open == 0:
         bot.send_message(message.chat.id, "🔒 **Извините, но в данный момент прием заявок временно закрыт администрацией проекта.**", parse_mode="Markdown")
         return
@@ -221,3 +222,5 @@ def process_final(message):
         inline_markup.row(InlineKeyboardButton("🛑 Забанить спамера", callback_data=f"ban_{data['user_id']}"))
         
         bot.send_message(ADMIN_CHAT_ID, admin_message, parse_mode="Markdown", reply_markup=inline_markup)
+        bot.send_message(message.chat.id, "🎉 **Ваша заявка успешно отправлена!** Администрация проекта BEST RUSSIA рассмотрит её в ближайшее время.", parse_mode="Markdown", reply_markup=ReplyKeyboardRemove())
+else:
