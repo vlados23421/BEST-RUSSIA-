@@ -12,7 +12,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8957594048:AAEgctfsZve38fv6CwPOXILf3UqI9Gq2W
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "8915047087")
 
 bot = telebot.TeleBot(BOT_TOKEN)
-DB_FILE = "/tmp/best_russia.db"
+DB_FILE = ":memory:"
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
