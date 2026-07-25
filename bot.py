@@ -16,7 +16,7 @@ ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "8915047087")
 bot = telebot.TeleBot(BOT_TOKEN)
 
 # --- ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ (SQLite) ---
-DB_FILE = "best_russia.db"
+DB_FILE = "/tmp/best_russia.db"
 
 def init_db():
     conn = sqlite3.connect(DB_FILE)
