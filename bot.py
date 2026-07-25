@@ -71,7 +71,6 @@ def home():
 
 def run_flask():
     port = int(os.getenv("PORT", 10000))
-    # Отключаем логи Flask, чтобы не спамить в консоль
     log = logging.getLogger('wsgi')
     log.setLevel(logging.ERROR)
     app.run(host='0.0.0.0', port=port)
@@ -82,10 +81,10 @@ def admin_panel(message):
     if str(message.chat.id) != str(ADMIN_CHAT_ID):
         return
 
-    total_users = db_query("SELECT COUNT(*) FROM users", fetchone=True)[0]
-    total_apps = db_query("SELECT value FROM stats WHERE key = 'total_apps'", fetchone=True)[0]
-    accepted = db_query("SELECT value FROM stats WHERE key = 'accepted_apps'", fetchone=True)[0]
-    is_open = db_query("SELECT value FROM stats WHERE key = 'recruitment_open'", fetchone=True)[0]
+    total_users = db_query("SELECT COUNT(*) FROM users", fetchone=True)
+    total_apps = db_query("SELECT value FROM stats WHERE key = 'total_apps'", fetchone=True)
+    accepted = db_query("SELECT value FROM stats WHERE key = 'accepted_apps'", fetchone=True)
+    is_open = db_query("SELECT value FROM stats WHERE key = 'recruitment_open'", fetchone=True)
     
     status_recruitment = "🟢 ОТКРЫТ" if is_open == 1 else "🔴 ЗАКРЫТ"
 
@@ -126,7 +125,7 @@ def start_application(message):
     user_id = message.from_user.id
     if is_banned(user_id): return
 
-    is_open = db_query("SELECT value FROM stats WHERE key = 'recruitment_open'", fetchone=True)[0]
+    is_open = db_query("SELECT value FROM stats WHERE key = 'recruitment_open'", fetchone=True)
     if is_open == 0:
         bot.send_message(message.chat.id, "🔒 **Извините, но в данный момент прием заявок временно закрыт администрацией проекта.**", parse_mode="Markdown")
         return
