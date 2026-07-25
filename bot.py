@@ -7,22 +7,21 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemo
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8957594048:AAEgctfsZve38fv6CwPOXILf3UqI9Gq2WbQ")
+# --- НАСТРОЙКИ ПОДКЛЮЧЕНИЯ И ВОЗРАСТА ---
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8957594048:AAEliVZQVUhQLgX6i0e1OkxZM1JjBCQVviA")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "8915047087")
+
+# Настройка возраста прямо в коде (меняйте эти цифры при необходимости)
+AGE_HELPER = 12   # Минимальный возраст для Хелпера
+AGE_DISCORD = 15  # Минимальный возраст для Агента Discord
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Настройки в оперативной памяти (сбрасываются при перезапуске сервера Render)
+# Временные списки в памяти
 active_users = set()  
 recruitment_open = True  
 user_applications = {}
 admin_states = {}
-
-# Глобальные настройки минимального возраста (можно менять из админки)
-age_limits = {
-    "helper": 12,
-    "discord": 15
-}
 
 # --- ВЕБ-СЕРВЕР FLASK ДЛЯ RENDER ---
 app = Flask(__name__)
@@ -43,14 +42,13 @@ def admin_panel(message):
         "👑 **ПАНЕЛЬ УПРАВЛЕНИЯ BEST RUSSIA** 👑\n\n"
         f"👥 Пользователей в кэше для рассылки: `{len(active_users)}`\n"
         f"⚙️ Прием анкет сейчас: **{status_recruitment}**\n"
-        f"🔞 Ограничения: Хелпер [**{age_limits['helper']}+**] | Discord [**{age_limits['discord']}+**]\n\n"
+        f"🔞 Настройки возраста: Хелпер [{AGE_HELPER}+] | Discord [{AGE_DISCORD}+]\n\n"
         "Выберите действие на панели ниже:"
     )
     markup = InlineKeyboardMarkup(row_width=1)
     markup.add(
         InlineKeyboardButton("📢 Рассылка сообщений", callback_data="admin_broadcast"),
-        InlineKeyboardButton("🔒 Вкл/Выкл Набор хелперов", callback_data="admin_toggle_recruitment"),
-        InlineKeyboardButton("🔞 Изменить Возраст для подачи", callback_data="admin_change_age_menu")
+        InlineKeyboardButton("🔒 Вкл/Выкл Набор хелперов", callback_data="admin_toggle_recruitment")
     )
     bot.send_message(message.chat.id, admin_text, parse_mode="Markdown", reply_markup=markup)
 
@@ -71,8 +69,7 @@ def start_application(message):
         return
     
     chosen_role = "Хелпер" if "Хелпера" in message.text else "Агент поддержки Discord"
-    # Берем возраст из наших динамических настроек
-    min_age = age_limits["helper"] if chosen_role == "Хелпер" else age_limits["discord"]
+    min_age = AGE_HELPER if chosen_role == "Хелпер" else AGE_DISCORD
     
     user_applications[message.from_user.id] = {
         "username": f"@{message.from_user.username}" if message.from_user.username else "Скрыт", 
@@ -162,22 +159,7 @@ def handle_callbacks(call):
         bot.answer_callback_query(call.id, f"Статус набора изменен на: {status_word}", show_alert=True)
         admin_panel(call.message)
 
-    elif call.data == "admin_change_age_menu":
-        markup = InlineKeyboardMarkup()
-        markup.add(
-            InlineKeyboardButton("Изменить для Хелперов 🚀", callback_data="set_age_helper"),
-            InlineKeyboardButton("Изменить для Discord 🎮", callback_data="set_age_discord")
-        )
-        bot.send_message(ADMIN_CHAT_ID, "Какую должность настраиваем?", reply_markup=markup)
-        bot.answer_callback_query(call.id)
-
-    elif call.data in ["set_age_helper", "set_age_discord"]:
-        role_key = "helper" if "helper" in call.data else "discord"
-        bot.send_message(ADMIN_CHAT_ID, f"🔢 Введите **новый минимальный возраст** для этой должности цифрой (или напишите 'отмена'):")
-        admin_states[ADMIN_CHAT_ID] = f"waiting_age_{role_key}"
-        bot.answer_callback_query(call.id)
-
-# --- ОБРАБОТКА ТЕКСТА РАССЫЛКИ И ВВОДА ВОЗРАСТА ---
+# --- ОБРАБОТКА ТЕКСТА РАССЫЛКИ ---
 @bot.message_handler(func=lambda msg: str(msg.chat.id) == str(ADMIN_CHAT_ID) and msg.chat.id in admin_states)
 def handle_admin_inputs(message):
     state = admin_states[message.chat.id]
@@ -191,3 +173,14 @@ def handle_admin_inputs(message):
     if state == "waiting_broadcast":
         bot.send_message(ADMIN_CHAT_ID, f"🚀 Начинаю рассылку для {len(active_users)} человек...")
         success = 0
+        for u in active_users:
+            try:
+                bot.send_message(u, text, parse_mode="Markdown")
+                success += 1
+            except Exception: pass
+        bot.send_message(ADMIN_CHAT_ID, f"📊 Рассылка завершена! Успешно доставлено: `{success}`")
+        admin_states.pop(message.chat.id, None)
+
+if __name__ == '__main__':
+    threading.Thread(target=run_flask, daemon=True).start()
+    bot.infinity_polling()
