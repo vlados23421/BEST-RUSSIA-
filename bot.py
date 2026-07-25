@@ -10,7 +10,8 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemo
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- НАСТРОЙКИ БЕЗОПАСНОСТИ И ПОДКЛЮЧЕНИЯ ---
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8957594048:AAHtXtWgW4nA7VsbxK1dGFNivxLU32tt8NY")
+# Ваш новый рабочий токен успешно интегрирован в код
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8957594048:AAEgctfsZve38fv6CwPOXILf3UqI9Gq2WbQ")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "8915047087") 
 
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -21,28 +22,22 @@ DB_FILE = "best_russia.db"
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # Таблица пользователей для рассылки
     cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT)''')
-    # Таблица черного списка
     cursor.execute('''CREATE TABLE IF NOT EXISTS blacklist (user_id INTEGER PRIMARY KEY)''')
-    # Таблица заявок и настроек системы
     cursor.execute('''CREATE TABLE IF NOT EXISTS stats (key TEXT PRIMARY KEY, value INTEGER)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS apps_archive (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, role TEXT, age TEXT, experience TEXT, status TEXT)''')
     
-    # Дефолтные настройки
     cursor.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('total_apps', 0)")
     cursor.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('accepted_apps', 0)")
     cursor.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('declined_apps', 0)")
-    cursor.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('recruitment_open', 1)") # 1 - Открыт, 0 - Закрыт
+    cursor.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('recruitment_open', 1)")
     
     conn.commit()
     conn.close()
 
 init_db()
 
-# Временное хранилище для процесса заполнения анкет в оперативной памяти
 user_applications = {}
-# Состояния админки для ожидания текста рассылки или ID для бана
 admin_states = {}
 
 # --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
@@ -51,7 +46,6 @@ def clean_input(text: str) -> str:
     return text.strip()[:500]
 
 def db_query(query, params=(), fetchone=False, fetchall=False, commit=False):
-    """Безопасная работа с БД с автоматическим закрытием соединения."""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute(query, params)
@@ -82,17 +76,16 @@ def run_health_check():
     server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
     server.serve_forever()
 
-# --- ЛОГИКА АДМИН-ПАНЕЛИ (ТОЛЬКО ДЛЯ ВАС) ---
+# --- ЛОГИКА АДМИН-ПАНЕЛИ ---
 @bot.message_handler(commands=['admin'])
 def admin_panel(message):
     if str(message.chat.id) != str(ADMIN_CHAT_ID):
         return
 
-    # Загружаем актуальную статистику
-    total_users = db_query("SELECT COUNT(*) FROM users", fetchone=True)[0]
-    total_apps = db_query("SELECT value FROM stats WHERE key = 'total_apps'", fetchone=True)[0]
-    accepted = db_query("SELECT value FROM stats WHERE key = 'accepted_apps'", fetchone=True)[0]
-    is_open = db_query("SELECT value FROM stats WHERE key = 'recruitment_open'", fetchone=True)[0]
+    total_users = db_query("SELECT COUNT(*) FROM users", fetchone=True)
+    total_apps = db_query("SELECT value FROM stats WHERE key = 'total_apps'", fetchone=True)
+    accepted = db_query("SELECT value FROM stats WHERE key = 'accepted_apps'", fetchone=True)
+    is_open = db_query("SELECT value FROM stats WHERE key = 'recruitment_open'", fetchone=True)
     
     status_recruitment = "🟢 ОТКРЫТ" if is_open == 1 else "🔴 ЗАКРЫТ"
 
@@ -133,8 +126,7 @@ def start_application(message):
     user_id = message.from_user.id
     if is_banned(user_id): return
 
-    # Проверка, открыт ли набор администрацией
-    is_open = db_query("SELECT value FROM stats WHERE key = 'recruitment_open'", fetchone=True)[0]
+    is_open = db_query("SELECT value FROM stats WHERE key = 'recruitment_open'", fetchone=True)
     if is_open == 0:
         bot.send_message(message.chat.id, "🔒 **Извините, но в данный момент прием заявок временно закрыт администрацией проекта.**", parse_mode="Markdown")
         return
@@ -209,7 +201,6 @@ def process_final(message):
     if message.text == "Отправить заявку ✅":
         data = user_applications[user_id]
         
-        # Обновляем глобальную статистику в БД
         db_query("UPDATE stats SET value = value + 1 WHERE key = 'total_apps'", commit=True)
         db_query("INSERT INTO apps_archive (user_id, role, age, experience, status) VALUES (?, ?, ?, ?, 'На рассмотрении')", 
                  (data['user_id'], data['role'], data['age'], data['experience']), commit=True)
@@ -224,4 +215,11 @@ def process_final(message):
         )
         
         inline_markup = InlineKeyboardMarkup()
-        inline_markup.add(
+        inline_markup.row(
+            InlineKeyboardButton("Одобрить ✅", callback_data=f"accept_{data['user_id']}_{data['role'][:10]}"),
+            InlineKeyboardButton("Отклонить ❌", callback_data=f"decline_{data['user_id']}_{data['role'][:10]}")
+        )
+        inline_markup.row(InlineKeyboardButton("🛑 Забанить спамера", callback_data=f"ban_{data['user_id']}"))
+        
+        try:
+            bot.send_message(ADMIN_CHAT_ID, admin_message, parse_mode="Markdown", reply_markup=inline_markup)
