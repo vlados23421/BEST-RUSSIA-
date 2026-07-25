@@ -10,7 +10,6 @@ from telebot.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemo
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # --- НАСТРОЙКИ БЕЗОПАСНОСТИ И ПОДКЛЮЧЕНИЯ ---
-# Ваш новый рабочий токен успешно интегрирован в код
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8957594048:AAEgctfsZve38fv6CwPOXILf3UqI9Gq2WbQ")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "8915047087") 
 
@@ -216,8 +215,8 @@ def process_final(message):
         
         inline_markup = InlineKeyboardMarkup()
         inline_markup.row(
-            InlineKeyboardButton("Одобрить ✅", callback_data=f"accept_{data['user_id']}_{data['role'][:10]}"),
-            InlineKeyboardButton("Отклонить ❌", callback_data=f"decline_{data['user_id']}_{data['role'][:10]}")
+            InlineKeyboardButton("Одобрить ✅", callback_data=f"accept_{data['user_id']}_app"),
+            InlineKeyboardButton("Отклонить ❌", callback_data=f"decline_{data['user_id']}_app")
         )
         inline_markup.row(InlineKeyboardButton("🛑 Забанить спамера", callback_data=f"ban_{data['user_id']}"))
         
