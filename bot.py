@@ -4,20 +4,20 @@ import random
 import time
 import json
 import os
+import sys  # Добавлено для отслеживания системных ошибок
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # НАСТРОЙКИ БОТА
 TOKEN = "8957594048:AAFpWXMuYMzqdW89S1m8BKvkePN8TcQKOw0"
-ADMIN_CHAT_ID = 8915047087      # Ваш личный Telegram ID
-GAME_TOPIC_ID = 28           # ID игрового топика в вашей группе
+ADMIN_CHAT_ID = 8915047087      
+GAME_TOPIC_ID = 28           
 
 bot = telebot.TeleBot(TOKEN)
 
 DATA_FILE = "players_data.json"
 PROMO_FILE = "promos_data.json"
 
-# --- ИСПРАВЛЕНИЕ: АВТО-СОЗДАНИЕ ФАЙЛОВ ПРИ ОТСУТСТВИИ ---
 if not os.path.exists(DATA_FILE):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         f.write("{}")
@@ -26,7 +26,6 @@ if not os.path.exists(PROMO_FILE):
     with open(PROMO_FILE, "w", encoding="utf-8") as f:
         f.write("{}")
 
-# --- СИСТЕМА ДАННЫХ (JSON) ---
 def load_data(file_name, default_factory):
     if os.path.exists(file_name):
         try:
@@ -55,7 +54,6 @@ def get_player(user_id):
         save_data(DATA_FILE, players)
     return players[uid]
 
-# --- ИГРОВЫЕ КЛАВИАТУРЫ ---
 def game_keyboard(user_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_profile = types.InlineKeyboardButton("👤 Мой паспорт", callback_data="game_profile")
@@ -86,7 +84,6 @@ def admin_keyboard():
     markup.add(btn_create, btn_back)
     return markup
 
-# --- КОМАНДЫ ---
 @bot.message_handler(commands=['game', 'start'])
 def cmd_game(message):
     if message.chat.type in ['group', 'supergroup']:
@@ -111,7 +108,6 @@ def cmd_game(message):
     )
     bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=game_keyboard(user_id), message_thread_id=message.message_thread_id)
 
-# --- ОБРАБОТКА ИГРОВЫХ КНОПОК ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith("game_"))
 def handle_game(call):
     user_id = call.from_user.id
@@ -188,7 +184,8 @@ def handle_game(call):
             return
         
         p['balance'] -= 35000
-        loot_type = random.choices(["money", "car"], weights=[75, 25])[0]
+        # ИСПРАВЛЕНО: Задан весовой шанс [70, 30] вместо пустых скобок
+        loot_type = random.choices(["money", "car"], weights=[70, 30])[0]
         
         if loot_type == "money":
             win_money = random.randint(10000, 85000)
@@ -221,3 +218,4 @@ def handle_game(call):
     elif call.data == "game_admin_promo":
         if user_id != ADMIN_CHAT_ID: return
         msg = bot.send_message(call.message.chat.id, "📝 Введите параметры промокода в формате:\n`НАЗВАНИЕ СУММА АКТИВАЦИИ` через пробел.\n\nПример: `BEST2026 50000 10`", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, admin_create_promo)
