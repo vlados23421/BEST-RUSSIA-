@@ -2,58 +2,32 @@ import telebot
 from telebot import types
 import random
 import time
-import json
-import os
-import sys  # Добавлено для отслеживания системных ошибок
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # НАСТРОЙКИ БОТА
 TOKEN = "8957594048:AAFpWXMuYMzqdW89S1m8BKvkePN8TcQKOw0"
-ADMIN_CHAT_ID = 8915047087      
-GAME_TOPIC_ID = 28           
+ADMIN_CHAT_ID = 8915047087      # Ваш личный Telegram ID
+GAME_TOPIC_ID = 12345           # ID игрового топика в вашей группе
 
 bot = telebot.TeleBot(TOKEN)
 
-DATA_FILE = "players_data.json"
-PROMO_FILE = "promos_data.json"
-
-if not os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        f.write("{}")
-
-if not os.path.exists(PROMO_FILE):
-    with open(PROMO_FILE, "w", encoding="utf-8") as f:
-        f.write("{}")
-
-def load_data(file_name, default_factory):
-    if os.path.exists(file_name):
-        try:
-            with open(file_name, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return default_factory()
-    return default_factory()
-
-def save_data(file_name, data):
-    with open(file_name, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-
-players = load_data(DATA_FILE, dict)
-promos = load_data(PROMO_FILE, dict)
+# --- ИСПРАВЛЕНИЕ: ХРАНЕНИЕ В ПАМЯТИ (БЕЗ ФАЙЛОВ И БД) ---
+players = {}
+promos = {}
 
 def get_player(user_id):
     uid = str(user_id)
     if uid not in players:
         players[uid] = {
-            "balance": 15000,       
-            "cars": [],            
-            "last_work": 0,        
-            "last_high_work": 0    
+            "balance": 15000,       # Стартовый капитал
+            "cars": [],            # Гараж
+            "last_work": 0,        # Таймер обычной работы
+            "last_high_work": 0    # Таймер высокооплачиваемой работы
         }
-        save_data(DATA_FILE, players)
     return players[uid]
 
+# --- ИГРОВЫЕ КЛАВИАТУРЫ ---
 def game_keyboard(user_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_profile = types.InlineKeyboardButton("👤 Мой паспорт", callback_data="game_profile")
@@ -84,6 +58,7 @@ def admin_keyboard():
     markup.add(btn_create, btn_back)
     return markup
 
+# --- КОМАНДЫ ---
 @bot.message_handler(commands=['game', 'start'])
 def cmd_game(message):
     if message.chat.type in ['group', 'supergroup']:
@@ -108,6 +83,7 @@ def cmd_game(message):
     )
     bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=game_keyboard(user_id), message_thread_id=message.message_thread_id)
 
+# --- ОБРАБОТКА ИГРОВЫХ КНОПОК ---
 @bot.callback_query_handler(func=lambda call: call.data.startswith("game_"))
 def handle_game(call):
     user_id = call.from_user.id
@@ -144,7 +120,6 @@ def handle_game(call):
         salary = random.randint(1500, 4000)
         p['balance'] += salary
         p['last_work'] = current_time
-        save_data(DATA_FILE, players)
         
         bot.answer_callback_query(call.id, f"⛏️ Вы отработали на Шахте и получили +{salary:,} руб.!", show_alert=True)
         cars_str = ", ".join(p['cars']) if p['cars'] else "Отсутствует"
@@ -166,7 +141,6 @@ def handle_game(call):
         salary = random.randint(8000, 15000)
         p['balance'] += salary
         p['last_high_work'] = current_time
-        save_data(DATA_FILE, players)
         
         bot.answer_callback_query(call.id, f"🚚 Рейс успешно завершен! Вы заработали +{salary:,} руб.!", show_alert=True)
         cars_str = ", ".join(p['cars']) if p['cars'] else "Отсутствует"
@@ -184,8 +158,7 @@ def handle_game(call):
             return
         
         p['balance'] -= 35000
-        # ИСПРАВЛЕНО: Задан весовой шанс [70, 30] вместо пустых скобок
-        loot_type = random.choices(["money", "car"], weights=[70, 30])[0]
+        loot_type = random.choices(["money", "car"], weights=[75, 25])[0]
         
         if loot_type == "money":
             win_money = random.randint(10000, 85000)
@@ -196,8 +169,6 @@ def handle_game(call):
             p['cars'].append(win_car)
             prize = f"🚗 Эксклюзивный транспорт: **{win_car}**"
             
-        save_data(DATA_FILE, players)
-        
         text = f"📦 **Вы успешно открыли контейнер на площадке BEST RUSSIA!**\n🎁 Ваша награда — {prize}!"
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=game_keyboard(user_id))
         bot.answer_callback_query(call.id)
@@ -219,3 +190,27 @@ def handle_game(call):
         if user_id != ADMIN_CHAT_ID: return
         msg = bot.send_message(call.message.chat.id, "📝 Введите параметры промокода в формате:\n`НАЗВАНИЕ СУММА АКТИВАЦИИ` через пробел.\n\nПример: `BEST2026 50000 10`", parse_mode="Markdown")
         bot.register_next_step_handler(msg, admin_create_promo)
+        bot.answer_callback_query(call.id)
+
+# --- ЛОГИКА ПРОМОКОДОВ ---
+def admin_create_promo(message):
+    if message.from_user.id != ADMIN_CHAT_ID: 
+        return
+    try:
+        parts = message.text.split()
+        name = parts[0].upper()
+        money = int(parts[1])
+        uses = int(parts[2])
+        
+        promos[name] = {
+            "money": money,
+            "max_uses": uses,
+            "current_uses": 0,
+            "activated_users": []
+        }
+        bot.send_message(message.chat.id, f"✅ Промокод **{name}** успешно создан!\n💰 Награда: {money:,} руб.\n👥 Количество активаций: {uses}", parse_mode="Markdown")
+    except Exception:
+        bot.send_message(message.chat.id, "❌ Ошибка формата! Используйте шаблон: `НАЗВАНИЕ СУММА АКТИВАЦИИ`")
+
+def user_activate_promo(message):
+    user_id = message.from_user.id
