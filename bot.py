@@ -3,9 +3,9 @@ from telebot import types
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-# НАСТРОЙКИ БОТА (Заполните своими данными)
+# НАСТРОЙКИ БОТА (Данные успешно внесены)
 TOKEN = "8957594048:AAFpWXMuYMzqdW89S1m8BKvkePN8TcQKOw0"
-ADMIN_CHAT_ID = 8915047087  # ID группы, куда приходят анкеты
+ADMIN_CHAT_ID = 8915047087  # ID вашего админ-чата / профиля
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -16,8 +16,18 @@ user_data = {}
 @bot.message_handler(commands=['start'])
 def cmd_start(message):
     user_id = message.from_user.id
-    user_data[user_id] = {}  # Очищаем/создаем данные сессии
+    user_data[user_id] = {}  # Очищаем данные сессии кандидатов
     
+    # 1. Принудительно удаляем старую нижнюю клавиатуру, оставшуюся от прошлых версий
+    remove_markup = types.ReplyKeyboardRemove()
+    msg_clean = bot.send_message(message.chat.id, "🔄 Обновление интерфейса...", reply_markup=remove_markup)
+    
+    try:
+        bot.delete_message(message.chat.id, msg_clean.message_id)
+    except Exception:
+        pass
+
+    # 2. Отправляем новое красивое меню с инлайн-кнопками
     text = (
         "🔴 **BEST RUSSIA | Подача заявок**\n\n"
         "Рады видеть вас! Выберите желаемую должность для подачи анкеты.\n\n"
@@ -85,10 +95,10 @@ def process_name_age(message):
     if user_id not in user_data: 
         return
     
-    # Надежное извлечение возраста (ищем любые числа в тексте)
+    # Извлекаем числа из сообщения кандидата для проверки возраста
     text_nums = [int(s) for s in message.text.split() if s.isdigit()]
     
-    # Если нашли число и оно меньше 14 — отклоняем кандидата сразу
+    # Если ввели возраст меньше 14 лет — бот сразу завершает опрос
     if text_nums and text_nums[0] < 14:
         bot.send_message(message.chat.id, "⚠️ На проект требуются сотрудники от **14 лет**. Подрастите и приходите позже!")
         user_data.pop(user_id, None)
@@ -153,11 +163,11 @@ def process_why_or_about(message):
     user_data[user_id]["why_me_or_about"] = message.text
     
     data = user_data[user_id]
-    user_data.pop(user_id, None)  # Очищаем временную сессию из памяти
+    user_data.pop(user_id, None)  # Полностью очищаем память сессии
     
     bot.send_message(message.chat.id, "🚀 **Ваша заявка успешно отправлена администрации!**", parse_mode="Markdown")
     
-    # Формирование карточки для админ-чата
+    # Формирование сообщения для админ-чата
     role_title = "ХЕЛПЕР" if data['role'] == 'helper' else "АГЕНТ ПОДДЕРЖКИ"
     username = f"@{message.from_user.username}" if message.from_user.username else "Нет юзернейма"
     
@@ -171,7 +181,7 @@ def process_why_or_about(message):
         f"❓ **О себе / Почему он:** {data['why_me_or_about']}"
     )
     
-    # Кнопки вердикта для админов
+    # Кнопки принятия решений для вас под анкетой кандидата
     markup = types.InlineKeyboardMarkup()
     btn_acc = types.InlineKeyboardButton("✅ Одобрить", callback_data=f"adm_accept_{user_id}_{data['role']}")
     btn_rej = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"adm_reject_{user_id}_{data['role']}")
@@ -192,9 +202,8 @@ def run_web_server():
     server.serve_forever()
 
 if __name__ == "__main__":
-    # Запускаем пинг-сервер в отдельном фоновом потоке
+    # Запускаем пинг-сервер в отдельном фоновом потоке, чтобы Render не усыплял бота
     Thread(target=run_web_server, daemon=True).start()
     
-    # Запуск бесконечного цикла работы бота
-    print("Бот BEST RUSSIA успешно запущен и ожидает пинга!")
+    print("Бот проекта BEST RUSSIA успешно запущен и готов к работе!")
     bot.infinity_polling()
