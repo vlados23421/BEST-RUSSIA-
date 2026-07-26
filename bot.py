@@ -9,23 +9,15 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # НАСТРОЙКИ БОТА
 TOKEN = "8957594048:AAFpWXMuYMzqdW89S1m8BKvkePN8TcQKOw0"
-ADMIN_CHAT_ID = 8915047087      # Ваш личный ID (для скрытой админки)
-GAME_TOPIC_ID = 28           # Укажите ID вашего игрового топика в группе!
+ADMIN_CHAT_ID = 8915047087      # Ваш личный ID (для скрытой кнопки)
+GAME_TOPIC_ID = 28           # ID топика в группе, где разрешено играть!
 
 bot = telebot.TeleBot(TOKEN)
 
 DATA_FILE = "players_data.json"
 PROMO_FILE = "promos_data.json"
 
-# База данных автосалона (Реалистичные цены BEST RUSSIA)
-CAR_DEALER = {
-    "Lada Priora": 250000,
-    "Skoda Octavia": 1200000,
-    "BMW M5 F90": 9500000,
-    "Rolls-Royce Cullinan": 35000000
-}
-
-# --- СИСТЕМА ДАННЫХ (JSON) ---
+# СИСТЕМА ДАННЫХ (JSON)
 def load_data(file_name, default_factory):
     if os.path.exists(file_name):
         try:
@@ -46,36 +38,35 @@ def get_player(user_id):
     uid = str(user_id)
     if uid not in players:
         players[uid] = {
-            "balance": 15000,      # Стартовые вирты
-            "exp": 0,              # Текущий опыт
-            "level": 1,            # Игровой уровень
+            "balance": 5000,       # Стартовые вирты
+            "exp": 1,              # Уровень
             "cars": [],            # Гараж
             "last_work": 0         # Кулдаун работы
         }
         save_data(DATA_FILE, players)
     return players[uid]
 
-# --- ИГРОВОЕ МЕНЮ С ДИНАМИЧЕСКИМИ КНОПКАМИ ---
+# ИГРОВОЕ МЕНЮ (С динамической админ-кнопкой)
 def game_keyboard(user_id):
     markup = types.InlineKeyboardMarkup(row_width=2)
     btn_profile = types.InlineKeyboardButton("👤 Мой паспорт", callback_data="game_profile")
-    btn_work = types.InlineKeyboardButton("⛏️ Список работ", callback_data="game_work_menu")
-    btn_case = types.InlineKeyboardButton("📦 Открыть контейнер [50к]", callback_data="game_case")
-    btn_promo = types.InlineKeyboardButton("🎟️ Активировать промокод", callback_data="game_promo_activate")
-    btn_shop = types.InlineKeyboardButton("🚗 Автосалон", callback_data="game_shop_menu")
+    btn_work = types.InlineKeyboardButton("⛏️ Шахта / Завод", callback_data="game_work")
+    btn_case = types.InlineKeyboardButton("📦 Контейнеры", callback_data="game_case")
+    btn_promo = types.InlineKeyboardButton("🎟️ Промокод", callback_data="game_promo_activate")
+    btn_casino = types.InlineKeyboardButton("🎰 Казино (Кости)", callback_data="game_casino_menu")
+    btn_market = types.InlineKeyboardButton("🚗 Б/У Рынок", callback_data="game_market_menu")
     
     markup.add(btn_profile, btn_work)
-    markup.add(btn_case, btn_shop)
-    markup.add(btn_promo)
+    markup.add(btn_case, btn_promo)
+    markup.add(btn_casino, btn_market)
     
-    # СКРЫТАЯ АДМИН-КНОПКА (Видна исключительно вам!)
+    # Кнопка отображается ТОЛЬКО вам
     if user_id == ADMIN_CHAT_ID:
-        btn_admin = types.InlineKeyboardButton("👑 Создать промокод [АДМИН]", callback_data="game_admin_promo")
+        btn_admin = types.InlineKeyboardButton("👑 Создать промокод [АДМ]", callback_data="game_admin_promo")
         markup.add(btn_admin)
-        
     return markup
 
-# --- КОМАНДА СТАРТ / ИГРА ---
+# КОМАНДА СТАРТ / ИГРА
 @bot.message_handler(commands=['game', 'start'])
 def cmd_game(message):
     if message.chat.type in ['group', 'supergroup']:
@@ -88,17 +79,19 @@ def cmd_game(message):
     
     remove_markup = types.ReplyKeyboardRemove()
     msg_clean = bot.send_message(message.chat.id, "🔄 Загрузка игрового меню...", reply_markup=remove_markup, message_thread_id=message.message_thread_id)
-    try: bot.delete_message(message.chat.id, msg_clean.message_id)
-    except: pass
+    try:
+        bot.delete_message(message.chat.id, msg_clean.message_id)
+    except Exception:
+        pass
 
     text = (
         "🔴 **BEST RUSSIA | Игровой Симулятор**\n\n"
         "Добро пожаловать в текстовую мобильную КРМП вселенную!\n"
-        "Продвигайтесь по карьерной лестнице, открывайте контейнеры и соберите самый элитный автопарк на сервере."
+        "Зарабатывайте вирты, открывайте контейнеры, играйте в казино и соберите лучший автопарк."
     )
     bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=game_keyboard(user_id), message_thread_id=message.message_thread_id)
 
-# --- ОБРАБОТКА ИГРОВЫХ КНОПОК ---
+# ОБРАБОТКА ИГРОВЫХ КНОПОК
 @bot.callback_query_handler(func=lambda call: call.data.startswith("game_"))
 def handle_game(call):
     user_id = call.from_user.id
@@ -110,115 +103,141 @@ def handle_game(call):
             f"📋 **ПАСПОРТ ГРАЖДАНИНА BEST RUSSIA**\n\n"
             f"👤 **Игрок:** {call.from_user.first_name}\n"
             f"💵 **Баланс вирт:** {p['balance']:,} рублей\n"
-            f"📈 **Игровой уровень:** {p.get('level', 1)} уровень ({p['exp']}/10 EXP)\n"
+            f"📈 **Игровой уровень:** {p['exp']} ур.\n"
             f"🚗 **Личный транспорт:** {cars_str}"
         )
         bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=game_keyboard(user_id))
         bot.answer_callback_query(call.id)
 
-    elif call.data == "game_work_menu":
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            types.InlineKeyboardButton("⛏️ Шахта (Доступно всем | 1.5к - 3.5к)", callback_data="game_do_work_mine"),
-            types.InlineKeyboardButton("🚚 Завод (С 3 уровня | 4к - 8к)", callback_data="game_do_work_factory"),
-            types.InlineKeyboardButton("Бизнесмен (С 5 уровня | 12к - 25к)", callback_data="game_do_work_biz"),
-            types.InlineKeyboardButton("⬅️ В меню", callback_data="game_main_menu")
-        )
-        bot.edit_message_text("💼 **Выберите доступное место работы:**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-        bot.answer_callback_query(call.id)
-
-    elif call.data.startswith("game_do_work_"):
-        work_type = call.data.replace("game_do_work_", "")
-        current_level = p.get('level', 1)
+    elif call.data == "game_work":
         current_time = time.time()
-        
-        # Кулдаун на любую работу: 45 секунд
-        if current_time - p['last_work'] < 45:
-            left = int(45 - (current_time - p['last_work']))
-            bot.answer_callback_query(call.id, f"⏳ Вы устали! Подождите еще {left} сек.", show_alert=True)
+        if current_time - p['last_work'] < 60:
+            left = int(60 - (current_time - p['last_work']))
+            bot.answer_callback_query(call.id, f"⏳ Вы сильно устали! Подождите еще {left} сек.", show_alert=True)
             return
-
-        if work_type == "mine":
-            salary = random.randint(1500, 3500)
-            w_name = "на Шахте"
-        elif work_type == "factory":
-            if current_level < 3:
-                bot.answer_callback_query(call.id, "❌ Нужен минимум 3 уровень!", show_alert=True)
-                return
-            salary = random.randint(4000, 8000)
-            w_name = "на Заводе"
-        elif work_type == "biz":
-            if current_level < 5:
-                bot.answer_callback_query(call.id, "❌ Нужен минимум 5 уровень!", show_alert=True)
-                return
-            salary = random.randint(12000, 25000)
-            w_name = "в своем Офисе"
-
-        p['balance'] += salary
-        p['exp'] += 1
-        p['last_work'] = current_time
         
-        # Система повышения уровней
-        if p['exp'] >= 10:
-            p['exp'] = 0
-            p['level'] = current_level + 1
-            bot.send_message(call.message.chat.id, f"🎉 Поздравляем {call.from_user.first_name}! Вы получили **{p['level']} уровень**!")
-
+        salary = random.randint(1500, 4500)
+        p['balance'] += salary
+        p['exp'] += random.choice([0, 1])
+        p['last_work'] = current_time
         save_data(DATA_FILE, players)
-        bot.edit_message_text(f"⚒️ Вы успешно отработали смену {w_name} и получили **+{salary:,} рублей** и **+1 EXP**!", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=game_keyboard(user_id))
+        
+        text = f"⛏️ Вы отлично отработали смену и получили **+{salary:,} рублей**!"
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=game_keyboard(user_id))
         bot.answer_callback_query(call.id)
 
     elif call.data == "game_case":
-        if p['balance'] < 50000:
-            bot.answer_callback_query(call.id, "❌ Стоимость контейнера: 50,000 руб.", show_alert=True)
+        if p['balance'] < 15000:
+            bot.answer_callback_query(call.id, "❌ Недостаточно средств! Стоимость контейнера: 15,000 руб.", show_alert=True)
             return
         
-        p['balance'] -= 50000
-        # ИСПРАВЛЕНО: Теперь аргументы весов передаются правильно (70% деньги, 20% опыт, 10% машина)
-        loot_type = random.choices(["money", "exp", "car"], weights=[70, 20, 10])[0]
+        p['balance'] -= 15000
+        loot_type = random.choices(["money", "car"], weights=[70, 30])[0]
         
         if loot_type == "money":
-            win_money = random.randint(15000, 120000)
+            win_money = random.randint(5000, 35000)
             p['balance'] += win_money
             prize = f"💵 Деньги: **{win_money:,} рублей**"
-        elif loot_type == "exp":
-            win_exp = random.randint(2, 5)
-            p['exp'] += win_exp
-            prize = f"📈 Опыт: **+{win_exp} EXP**"
         else:
-            win_car = random.choice(list(CAR_DEALER.keys()))
+            win_car = random.choice(["Lada Priora", "Skoda Octavia", "BMW M5 F90", "Rolls-Royce Cullinan"])
             p['cars'].append(win_car)
             prize = f"🚗 Автомобиль: **{win_car}**"
             
         save_data(DATA_FILE, players)
-        bot.edit_message_text(f"📦 Вы открыли Контейнер на порту!\n🎁 Ваша награда — {prize}!", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=game_keyboard(user_id))
-        bot.answer_callback_query(call.id)
-
-    elif call.data == "game_shop_menu":
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        for car, price in CAR_DEALER.items():
-            markup.add(types.InlineKeyboardButton(f"🚗 {car} — {price:,} руб.", callback_data=f"game_buycar_{car}"))
-        markup.add(types.InlineKeyboardButton("⬅️ В меню", callback_data="game_main_menu"))
-        bot.edit_message_text("🏬 **Автосалон проекта BEST RUSSIA:**", call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=markup)
-        bot.answer_callback_query(call.id)
-
-    elif call.data.startswith("game_buycar_"):
-        car_name = call.data.replace("game_buycar_", "")
-        car_price = CAR_DEALER[car_name]
         
-        if p['balance'] < car_price:
-            bot.answer_callback_query(call.id, f"❌ Не хватает вирт! Цена: {car_price:,} руб.", show_alert=True)
-            return
-            
-        p['balance'] -= car_price
-        p['cars'].append(car_name)
-        save_data(DATA_FILE, players)
-        bot.answer_callback_query(call.id, f"🎉 Вы успешно купили {car_name}!", show_alert=True)
-        # Возвращаем в меню
-        bot.edit_message_text("🔴 **BEST RUSSIA | Игровой Симулятор**", call.message.chat.id, call.message.message_id, reply_markup=game_keyboard(user_id))
-
-    elif call.data == "game_main_menu":
-        bot.edit_message_text("🔴 **BEST RUSSIA | Игровой Симулятор**", call.message.chat.id, call.message.message_id, reply_markup=game_keyboard(user_id))
+        text = f"📦 Вы открыли Контейнер!\n🎁 Ваша награда — {prize}!"
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=game_keyboard(user_id))
         bot.answer_callback_query(call.id)
 
     elif call.data == "game_promo_activate":
+        msg = bot.send_message(call.message.chat.id, "🎟️ **Введите название промокода для активации:**", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, user_activate_promo)
+        bot.answer_callback_query(call.id)
+
+    elif call.data == "game_casino_menu":
+        text = "🎰 **Добро пожаловать в Казино Калигула!**\n\nИспользуйте команду для игры:\n`/dice [сумма]`\n\nПример: `/dice 5000`"
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=game_keyboard(user_id))
+        bot.answer_callback_query(call.id)
+
+    elif call.data == "game_market_menu":
+        text = "🚗 **Б/У Авторынок проекта**\n\nВы можете продать государству свою последнюю машину за **7,000 рублей**.\nИспользуйте команду: `/sellcar`"
+        bot.edit_message_text(text, call.message.chat.id, call.message.message_id, parse_mode="Markdown", reply_markup=game_keyboard(user_id))
+        bot.answer_callback_query(call.id)
+
+    elif call.data == "game_admin_promo" and user_id == ADMIN_CHAT_ID:
+        msg = bot.send_message(call.message.chat.id, "📝 Введите параметры промокода в формате:\n`НАЗВАНИЕ СУММА АКТИВАЦИИ` (через пробел)\n\nПример: `BEST2026 50000 10`", parse_mode="Markdown")
+        bot.register_next_step_handler(msg, admin_create_promo)
+        bot.answer_callback_query(call.id)
+
+# КОМАНДЫ КАЗИНО И РЫНКА
+@bot.message_handler(commands=['dice'])
+def cmd_dice(message):
+    if message.chat.type in ['group', 'supergroup'] and message.message_thread_id != GAME_TOPIC_ID:
+        return
+        
+    user_id = message.from_user.id
+    p = get_player(user_id)
+    
+    try:
+        bet = int(message.text.split()[1])
+    except Exception:
+        bot.reply_to(message, "⚠️ Формат: `/dice [сумма]`", parse_mode="Markdown")
+        return
+        
+    if bet <= 0:
+        bot.reply_to(message, "❌ Ставка должна быть больше 0!")
+        return
+    if p['balance'] < bet:
+        bot.reply_to(message, "❌ У вас нет такой суммы!")
+        return
+        
+    user_score = random.randint(1, 6)
+    bot_score = random.randint(1, 6)
+    
+    if user_score > bot_score:
+        p['balance'] += bet
+        res = f"🎉 Вы выкинули {user_score}, а бот {bot_score}. **Вы выиграли {bet:,} руб!**"
+    elif user_score < bot_score:
+        p['balance'] -= bet
+        res = f"📉 Вы выкинули {user_score}, а бот {bot_score}. **Вы проиграли {bet:,} руб.**"
+    else:
+        res = f"🤝 Ничья! Оба выкинули {user_score}. Вирты сохранены."
+        
+    save_data(DATA_FILE, players)
+    bot.reply_to(message, res)
+
+@bot.message_handler(commands=['sellcar'])
+def cmd_sellcar(message):
+    if message.chat.type in ['group', 'supergroup'] and message.message_thread_id != GAME_TOPIC_ID:
+        return
+        
+    user_id = message.from_user.id
+    p = get_player(user_id)
+    
+    if not p['cars']:
+        bot.reply_to(message, "❌ У вас нет машин для продажи!")
+        return
+        
+    sold = p['cars'].pop()  # Продаем последнюю машину
+    p['balance'] += 7000
+    save_data(DATA_FILE, players)
+    bot.reply_to(message, f"🚗 Вы успешно продали государству **{sold}** за **7,000 руб**!")
+
+# ЛОГИКА ПРОМОКОДОВ
+def admin_create_promo(message):
+    if message.from_user.id != ADMIN_CHAT_ID: 
+        return
+    try:
+        parts = message.text.split()
+        name = parts[0].upper()
+        money = int(parts[1])
+        uses = int(parts[2])
+        
+        promos[name] = {
+            "money": money,
+            "max_uses": uses,
+            "current_uses": 0,
+            "activated_users": []
+        }
+        save_data(PROMO_FILE, promos)
+        bot.send_message(message.chat.id, f"✅ Промокод **{name}** успешно создан!\n💰 Награда: {money:,} руб.\n👥 Активаций: {uses}", parse_mode="Markdown")
