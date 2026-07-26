@@ -2,17 +2,18 @@ import telebot
 from telebot import types
 import random
 import time
+import os
 from threading import Thread
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 # НАСТРОЙКИ БОТА
 TOKEN = "8957594048:AAFpWXMuYMzqdW89S1m8BKvkePN8TcQKOw0"
 ADMIN_CHAT_ID = 8915047087      # Ваш личный Telegram ID
-GAME_TOPIC_ID = 12345           # ID игрового топика в вашей группе
+GAME_TOPIC_ID = 28           # ID игрового топика в вашей группе
 
 bot = telebot.TeleBot(TOKEN)
 
-# --- ИСПРАВЛЕНИЕ: ХРАНЕНИЕ В ПАМЯТИ (БЕЗ ФАЙЛОВ И БД) ---
+# Хранение игровых сессий прямо в оперативной памяти (RAM)
 players = {}
 promos = {}
 
@@ -20,10 +21,10 @@ def get_player(user_id):
     uid = str(user_id)
     if uid not in players:
         players[uid] = {
-            "balance": 15000,       # Стартовый капитал
-            "cars": [],            # Гараж
-            "last_work": 0,        # Таймер обычной работы
-            "last_high_work": 0    # Таймер высокооплачиваемой работы
+            "balance": 15000,       
+            "cars": [],            
+            "last_work": 0,        
+            "last_high_work": 0    
         }
     return players[uid]
 
@@ -71,10 +72,8 @@ def cmd_game(message):
     
     remove_markup = types.ReplyKeyboardRemove()
     msg_clean = bot.send_message(message.chat.id, "🔄 Загрузка интерфейса BEST RUSSIA...", reply_markup=remove_markup, message_thread_id=message.message_thread_id)
-    try:
-        bot.delete_message(message.chat.id, msg_clean.message_id)
-    except Exception:
-        pass
+    try: bot.delete_message(message.chat.id, msg_clean.message_id)
+    except: pass
 
     text = (
         "🔴 **BEST RUSSIA | Игровой Симулятор**\n\n"
@@ -194,8 +193,7 @@ def handle_game(call):
 
 # --- ЛОГИКА ПРОМОКОДОВ ---
 def admin_create_promo(message):
-    if message.from_user.id != ADMIN_CHAT_ID: 
-        return
+    if message.from_user.id != ADMIN_CHAT_ID: return
     try:
         parts = message.text.split()
         name = parts[0].upper()
@@ -214,3 +212,6 @@ def admin_create_promo(message):
 
 def user_activate_promo(message):
     user_id = message.from_user.id
+    promo_name = message.text.strip().upper()
+    
+    if promo_name not in promos:
