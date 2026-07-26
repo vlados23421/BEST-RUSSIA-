@@ -17,6 +17,15 @@ bot = telebot.TeleBot(TOKEN)
 DATA_FILE = "players_data.json"
 PROMO_FILE = "promos_data.json"
 
+# --- ИСПРАВЛЕНИЕ: АВТО-СОЗДАНИЕ ФАЙЛОВ ПРИ ОТСУТСТВИИ ---
+if not os.path.exists(DATA_FILE):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        f.write("{}")
+
+if not os.path.exists(PROMO_FILE):
+    with open(PROMO_FILE, "w", encoding="utf-8") as f:
+        f.write("{}")
+
 # --- СИСТЕМА ДАННЫХ (JSON) ---
 def load_data(file_name, default_factory):
     if os.path.exists(file_name):
@@ -38,10 +47,10 @@ def get_player(user_id):
     uid = str(user_id)
     if uid not in players:
         players[uid] = {
-            "balance": 15000,       # Стартовый капитал
-            "cars": [],            # Гараж
-            "last_work": 0,        # Таймер обычной работы
-            "last_high_work": 0    # Таймер высокооплачиваемой работы
+            "balance": 15000,       
+            "cars": [],            
+            "last_work": 0,        
+            "last_high_work": 0    
         }
         save_data(DATA_FILE, players)
     return players[uid]
@@ -57,7 +66,6 @@ def game_keyboard(user_id):
     markup.add(btn_profile, btn_work_menu)
     markup.add(btn_case, btn_promo)
     
-    # Кнопка админ-панели генерируется ТОЛЬКО для вашего Telegram ID
     if user_id == ADMIN_CHAT_ID:
         btn_admin = types.InlineKeyboardButton("👑 Панель Создателя [АДМ]", callback_data="game_admin_panel")
         markup.add(btn_admin)
@@ -213,6 +221,3 @@ def handle_game(call):
     elif call.data == "game_admin_promo":
         if user_id != ADMIN_CHAT_ID: return
         msg = bot.send_message(call.message.chat.id, "📝 Введите параметры промокода в формате:\n`НАЗВАНИЕ СУММА АКТИВАЦИИ` через пробел.\n\nПример: `BEST2026 50000 10`", parse_mode="Markdown")
-        bot.register_next_step_handler(msg, admin_create_promo)
-        bot.answer_callback_query(call.id)
-
