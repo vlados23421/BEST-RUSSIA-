@@ -1,299 +1,212 @@
-import os
-import threading
-from flask import Flask
-import telebot
-from telebot.types import (
-    ReplyKeyboardMarkup, KeyboardButton,
-    ReplyKeyboardRemove,
-    InlineKeyboardMarkup, InlineKeyboardButton
-)
+import asyncio
+import logging
+import re
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.filters.callback_data import CallbackData
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# Конфигурация
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8957594048:AAFpWXMuYMzqdW89S1m8BKvkePN8TcQKOw0")  # Замените или настройте переменные
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "8915047087")
-AGE_HELPER = 12
-AGE_DISCORD = 15
+# НАСТРОЙКИ БОТА
+TOKEN = "8957594048:AAFpWXMuYMzqdW89S1m8BKvkePN8TcQKOw0"
+ADMIN_CHAT_ID = 8915047087  # ID группы, куда приходят анкеты
 
-# Инициализация
-bot = telebot.TeleBot(BOT_TOKEN)
+logging.basicConfig(level=logging.INFO)
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
 
-# Временные данные
-active_users = set()
-recruitment_open = True
-user_applications = {}
-admin_states = {}
+# Фабрика для обработки решений админов
+class AdminDecision(CallbackData, prefix="adm"):
+    action: str  # accept / reject
+    user_id: int
+    role: str    # helper / support
 
-# Flask для heartbeat
-app = Flask(__name__)
-@app.route('/')
-def home():
-    return "Бот BEST RUSSIA онлайн!", 200
+# Состояния опроса
+class Form(StatesGroup):
+    role = State()            # Выбранная роль
+    name_age = State()        # Имя и возраст
+    param_1 = State()         # Хелпер: Ник | Поддержка: Время в ДС
+    param_2 = State()         # Хелпер: Онлайн | Поддержка: Знание правил
+    param_3 = State()         # Хелпер: Опыт | Поддержка: Опыт модерации
+    why_me_or_about = State() # Финальный развернутый ответ
 
-def run_flask():
-    port = int(os.getenv("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+# Кнопки главного меню
+def main_kb():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🛠️ Подать на Хелпера", callback_data="start_helper")
+    builder.button(text="🎧 Подать на Агента Поддержки", callback_data="start_support")
+    return builder.adjust(1).as_markup()
 
-# --- Обработчик /start /help ---
-@bot.message_handler(commands=['start', 'help'])
-def handle_start_help(message):
-    # Добавляем пользователя в активных
-    active_users.add(message.from_user.id)
-    # Отправляем меню
-    keyboard = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    keyboard.row(KeyboardButton("Подать на Хелпера 📝"))
-    keyboard.row(KeyboardButton("Подать на Агента Discord 🛠️"))
-    keyboard.row(KeyboardButton("Требования к кандидатам"))
+# Кнопки управления в процессе анкетирования
+def control_kb(show_back=True):
+    builder = InlineKeyboardBuilder()
+    if show_back:
+        builder.button(text="⬅️ Назад", callback_data="step_back")
+    builder.button(text="❌ Отмена", callback_data="step_cancel")
+    return builder.adjust(2 if show_back else 1).as_markup()
 
-    bot.send_message(
-        message.chat.id,
-        "✨ **Добро пожаловать!** \nВыберите вакансию или посмотрите требования.",
-        parse_mode="Markdown",
-        reply_markup=keyboard
-    )
+# Кнопки для администрации
+def admin_decision_kb(user_id: int, role: str):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Одобрить", callback_data=AdminDecision(action="accept", user_id=user_id, role=role))
+    builder.button(text="❌ Отклонить", callback_data=AdminDecision(action="reject", user_id=user_id, role=role))
+    return builder.adjust(2).as_markup()
 
-# --- Обработка кнопки "Требования" ---
-@bot.message_handler(func=lambda m: m.text == "Требования к кандидатам")
-def show_requirements_menu(message):
-    # Создаем inline меню для выбора роли
-    markup = InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        InlineKeyboardButton("Хелпер 📝", callback_data="requirements_helper"),
-        InlineKeyboardButton("Агент Discord 🛠️", callback_data="requirements_discord")
-    )
-    bot.send_message(
-        message.chat.id,
-        "Выберите роль, чтобы ознакомиться с требованиями:",
-        reply_markup=markup
-    )
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('requirements_'))
-def handle_requirements(call):
-    if call.data == 'requirements_helper':
-        text = (
-            "📝 **Требования к Хелперу:**\n"
-            f"- Возраст: минимум {AGE_HELPER} лет.\n"
-            "- Опыт работы с проектами.\n"
-            "- Ответственность и коммуникабельность.\n"
-            "- Активный пользователь, дружелюбный, отзывчивый."
-        )
-        bot.send_message(call.message.chat.id, text)
-    elif call.data == 'requirements_discord':
-        text = (
-            "📝 **Требования к Агенту поддержки Discord:**\n"
-            f"- Возраст: минимум {AGE_DISCORD} лет.\n"
-            "- Знание Discord и его функций.\n"
-            "- Хорошие коммуникативные навыки.\n"
-            "- Готовность помогать другим пользователям.\n"
-            "✅ Ответственный, дружелюбный и терпеливый."
-        )
-        bot.send_message(call.message.chat.id, text)
-
-# --- Обработка подачи заявки ---
-@bot.message_handler(func=lambda m: m.text in ["Подать на Хелпера 📝", "Подать на Агента Discord 🛠️"])
-def start_application(message):
-    global recruitment_open
-    if not recruitment_open:
-        bot.send_message(message.chat.id, "🔒 **Извините, сейчас набор закрыт.**", parse_mode="Markdown")
-        return
-    # Определяем роль
-    role = "Хелпер" if "Хелпера" in message.text else "Агент поддержки Discord"
-    min_age = AGE_HELPER if role == "Хелпер" else AGE_DISCORD
-    # Создаем заявку
-    user_applications[message.from_user.id] = {
-        "username": f"@{message.from_user.username}" if message.from_user.username else "Скрыт",
-        "user_id": message.from_user.id,
-        "role": role,
-        "min_age": min_age
-    }
-    bot.send_message(
-        message.chat.id,
-        f"Вы выбрали: **{role}**.\n\nШаг 1: Укажите ваш **реальный возраст** (минимум {min_age} лет):",
-        parse_mode="Markdown",
-        reply_markup=ReplyKeyboardRemove()
-    )
-    bot.register_next_step_handler(message, process_age)
-
-def process_age(message):
-    user_id = message.from_user.id
-    if user_id not in user_applications:
-        return
-    try:
-        age_value = int(message.text.strip())
-    except:
-        bot.send_message(message.chat.id, f"⚠️ Введите число от {user_applications[user_id]['min_age']} до 60.")
-        bot.register_next_step_handler(message, process_age)
-        return
-    min_age = user_applications[user_id]['min_age']
-    if age_value < min_age or age_value > 60:
-        bot.send_message(message.chat.id, f"⚠️ Возраст должен быть от {min_age} до 60.")
-        bot.register_next_step_handler(message, process_age)
-        return
-    user_applications[user_id]["age"] = str(age_value)
-    bot.send_message(
-        message.chat.id,
-        "Шаг 2: Расскажите о вашем опыте работы (минимум 10 символов):",
-        parse_mode="Markdown"
-    )
-    bot.register_next_step_handler(message, process_experience)
-
-def process_experience(message):
-    user_id = message.from_user.id
-    if user_id not in user_applications:
-        return
-    text = message.text.strip()
-    if len(text) < 10:
-        bot.send_message(message.chat.id, "⚠️ Опишите подробнее, минимум 10 символов.")
-        bot.register_next_step_handler(message, process_experience)
-        return
-    user_applications[user_id]["experience"] = text
-    bot.send_message(
-        message.chat.id,
-        "Шаг 3: Сколько часов в день вы готовы уделять проекту?",
-        parse_mode="Markdown"
-    )
-    bot.register_next_step_handler(message, process_time)
-
-def process_time(message):
-    user_id = message.from_user.id
-    if user_id not in user_applications:
-        return
-    text = message.text.strip()
-    user_applications[user_id]["time"] = text
-    data = user_applications[user_id]
-    summary = (
-        f"📋 **Проверьте ваши данные:**\n\n"
-        f"• **Должность:** {data['role']}\n"
-        f"• **Возраст:** {data['age']}\n"
-        f"• **Опыт:** {data['experience']}\n"
-        f"• **Готовность:** {data['time']}\n\n"
-        "Все верно?"
-    )
-    markup = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    markup.row(KeyboardButton("Отправить заявку ✅"))
-    markup.row(KeyboardButton("Отменить ❌"))
-    bot.send_message(
-        message.chat.id,
-        summary,
-        parse_mode="Markdown",
-        reply_markup=markup
-    )
-    bot.register_next_step_handler(message, process_final)
-
-def process_final(message):
-    user_id = message.from_user.id
-    if user_id not in user_applications:
-        return
-    if message.text == "Отправить заявку ✅":
-        data = user_applications[user_id]
-        emoji = "🚀" if data['role'] == "Хелпер" else "🎮"
-        admin_msg = (
-            f"{emoji} **НОВАЯ ЗАЯВКА | {data['role'].upper()}** {emoji}\n\n"
-            f"👤 **Кандидат:** {data['username']} (ID: `{data['user_id']}`)\n"
-            f"🔞 **Возраст:** {data['age']}\n"
-            f"🕒 **Готовность:** {data['time']}\n"
-            f"💼 **Опыт:**\n{data['experience']}"
-        )
-        inline_kb = InlineKeyboardMarkup()
-        inline_kb.row(
-            InlineKeyboardButton("Одобрить ✅", callback_data=f"accept_{data['user_id']}"),
-            InlineKeyboardButton("Отклонить ❌", callback_data=f"decline_{data['user_id']}")
-        )
-        bot.send_message(ADMIN_CHAT_ID, admin_msg, parse_mode="Markdown", reply_markup=inline_kb)
-        bot.send_message(
-            message.chat.id,
-            "🎉 Ваша заявка отправлена! Спасибо.",
-            parse_mode="Markdown",
-            reply_markup=ReplyKeyboardRemove()
-        )
-    else:
-        bot.send_message(message.chat.id, "❌ Заполнение отменено.", reply_markup=ReplyKeyboardRemove())
-
-    user_applications.pop(user_id, None)
-
-# --- Обработка решений админов ---
-@bot.callback_query_handler(func=lambda call: call.data.startswith('accept_') or call.data.startswith('decline_'))
-def handle_decision(call):
-    if str(call.message.chat.id) != str(ADMIN_CHAT_ID):
-        return
-    action, user_id_str = call.data.split('_')
-    user_id = int(user_id_str)
-    if action == "accept":
-        status_text = "🟢 ОДОБРЕНА"
-        notification = "🎉 Ваша заявка одобрена!"
-    else:
-        status_text = "🔴 ОТКЛОНЕНА"
-        notification = "❌ Ваша заявка отклонена!"
-    try:
-        bot.send_message(user_id, notification, parse_mode="Markdown")
-    except:
-        pass
-    # обновляем сообщение
-    bot.edit_message_text(
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id,
-        text=call.message.text + f"\n\n👉 **Решение:** {status_text}",
-        reply_markup=None
-    )
-
-# --- Обработка команды /admin ---
-@bot.message_handler(commands=['admin'])
-def admin_panel(message):
-    if str(message.chat.id) != str(ADMIN_CHAT_ID):
-        return
-    status = "🟢 ОТКРЫТО" if recruitment_open else "🔴 ЗАКРЫТО"
+# --- СТАРТ ---
+@dp.message(CommandStart())
+async def cmd_start(message: types.Message, state: FSMContext):
+    await state.clear()
     text = (
-        "👑 **Панель управления** 👑\n\n"
-        f"Пользователей для рассылки: {len(active_users)}\n"
-        f"Прием заявок: **{status}**\n"
-        f"Возраст - Хелпер: [{AGE_HELPER}+], Discord: [{AGE_DISCORD}+]\n\n"
-        "Выберите действие:"
+        "🔴 **BEST RUSSIA | Подача заявок**\n\n"
+        "Рады видеть вас! Выберите желаемую должность для подачи анкеты.\n\n"
+        "**⚠️ Требования:** Возраст 14+, грамотность, наличие Discord и микрофона."
     )
-    markup = InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        InlineKeyboardButton("📢 Рассылка", callback_data="admin_broadcast"),
-        InlineKeyboardButton("🔒 Вкл/Выкл Набор", callback_data="admin_toggle_recruitment")
-    )
-    bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
+    await message.answer(text, parse_mode="Markdown", reply_markup=main_kb())
 
-# --- Обработка callback для админ панели ---
-@bot.callback_query_handler(func=lambda call: True)
-def handle_callback(call):
-    global recruitment_open
-    # Админ-панель
-    if str(call.message.chat.id) == str(ADMIN_CHAT_ID):
-        if call.data == "admin_broadcast":
-            bot.send_message(ADMIN_CHAT_ID, "Введите текст для рассылки (или 'отмена'):")
-            admin_states[ADMIN_CHAT_ID] = "broadcast"
-        elif call.data == "admin_toggle_recruitment":
-            recruitment_open = not recruitment_open
-            status_str = "🟢 ОТКРЫТ" if recruitment_open else "🔴 ЗАКРЫТ"
-            bot.answer_callback_query(call.id, f"Статус набора: {status_str}", show_alert=True)
-            # Обновляем панель
-            admin_panel(call.message)
+# --- УПРАВЛЕНИЕ ШАГАМИ (НАЗАД / ОТМЕНА) ---
+@dp.callback_query(F.data == "step_cancel")
+async def cancel_wizard(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.edit_text("❌ Заполнение анкеты отменено. Вы можете начать заново: /start")
+    await callback.answer()
+
+@dp.callback_query(F.data == "step_back")
+async def process_back(callback: types.CallbackQuery, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is None:
         return
 
-    # Для решений заявок
-    if call.data.startswith('accept_') or call.data.startswith('decline_'):
-        handle_decision(call)
+    # Логика возврата на предыдущий шаг
+    state_steps = [Form.name_age, Form.param_1, Form.param_2, Form.param_3, Form.why_me_or_about]
+    current_index = state_steps.index(current_state)
+    
+    if current_index == 0:
+        await state.clear()
+        await callback.message.edit_text("Вы вернулись в главное меню.", reply_markup=main_kb())
+    else:
+        prev_state = state_steps[current_index - 1]
+        await state.set_state(prev_state)
+        data = await state.get_data()
+        
+        # Динамический текст вопросов в зависимости от роли
+        questions = {
+            Form.name_age: "1️⃣ Введите ваше реальное имя и возраст (например: Иван, 16):",
+            Form.param_1: "2️⃣ Введите ваш игровой ник (Ivan_Ivanov):" if data['role'] == 'helper' else "2️⃣ Сколько времени проводите в Discord?",
+            Form.param_2: "3️⃣ Ваш суточный онлайн (в часах):" if data['role'] == 'helper' else "3️⃣ Оцените знание правил Discord (от 0 до 10):",
+            Form.param_3: "4️⃣ Опишите ваш опыт работы хелпером:" if data['role'] == 'helper' else "4️⃣ Опишите ваш опыт модерации Discord:"
+        }
+        await callback.message.edit_text(questions[prev_state], reply_markup=control_kb(show_back=(prev_state != Form.name_age)))
+    await callback.answer()
 
-# --- Обработка сообщений для рассылки ---
-@bot.message_handler(func=lambda msg: str(msg.chat.id) in admin_states and admin_states[msg.chat.id]=='broadcast')
-def handle_broadcast(message):
-    if message.text.lower() == "отмена":
-        bot.send_message(ADMIN_CHAT_ID, "Рассылка отменена.")
-        del admin_states[message.chat.id]
+# --- НАЧАЛО ОПРОСА ---
+@dp.callback_query(F.data.in_({"start_helper", "start_support"}))
+async def start_form(callback: types.CallbackQuery, state: FSMContext):
+    role = "helper" if callback.data == "start_helper" else "support"
+    await state.update_data(role=role)
+    await state.set_state(Form.name_age)
+    await callback.message.edit_text("1️⃣ **Введите ваше реальное имя и возраст** (например: Иван, 16):", parse_mode="Markdown", reply_markup=control_kb(show_back=False))
+    await callback.answer()
+
+# --- ПОШАГОВЫЙ СБОР ДАННЫХ ---
+@dp.message(Form.name_age)
+async def process_name_age(message: types.Message, state: FSMContext):
+    # Извлекаем числа из текста для проверки возраста
+    ages = [int(s) for s in re.findall(r'\b\d+\b', message.text)]
+    if ages and ages[0] < 14:
+        await message.answer("⚠️ К сожалению, на проект требуются сотрудники от **14 лет**. Подрастите и приходите позже!")
+        await state.clear()
         return
-    success = 0
-    for u in active_users:
-        try:
-            bot.send_message(u, message.text, parse_mode="Markdown")
-            success += 1
-        except:
-            pass
-    bot.send_message(ADMIN_CHAT_ID, f"Рассылка завершена! Разослано: {success} пользователей.")
-    del admin_states[message.chat.id]
 
-# Запуск бота
-if __name__ == '__main__':
-    threading.Thread(target=run_flask, daemon=True).start()
-    bot.infinity_polling()
+    await state.update_data(name_age=message.text)
+    data = await state.get_data()
+    await state.set_state(Form.param_1)
+    
+    text = "2️⃣ **Введите ваш игровой ник на BEST RUSSIA** (Ivan_Ivanov):" if data['role'] == 'helper' else "2️⃣ **Сколько времени в день вы проводите в Discord?**"
+    await message.answer(text, parse_mode="Markdown", reply_markup=control_kb())
+
+@dp.message(Form.param_1)
+async def process_param_1(message: types.Message, state: FSMContext):
+    await state.update_data(param_1=message.text)
+    data = await state.get_data()
+    await state.set_state(Form.param_2)
+    
+    text = "3️⃣ **Каков ваш суточный онлайн?** (например: 4 часа):" if data['role'] == 'helper' else "3️⃣ **Оцените ваше знание правил Discord от 0 до 10:**"
+    await message.answer(text, parse_mode="Markdown", reply_markup=control_kb())
+
+@dp.message(Form.param_2)
+async def process_param_2(message: types.Message, state: FSMContext):
+    await state.update_data(param_2=message.text)
+    data = await state.get_data()
+    await state.set_state(Form.param_3)
+    
+    text = "4️⃣ **Имеется ли опыт работы хелпером?** (Опишите подробно):" if data['role'] == 'helper' else "4️⃣ **Опишите ваш опыт модерации в Discord:**"
+    await message.answer(text, parse_mode="Markdown", reply_markup=control_kb())
+
+@dp.message(Form.param_3)
+async def process_param_3(message: types.Message, state: FSMContext):
+    await state.update_data(param_3=message.text)
+    data = await state.get_data()
+    await state.set_state(Form.why_me_or_about)
+    
+    text = "5️⃣ **Почему именно вы должны занять этот пост?**" if data['role'] == 'helper' else "5️⃣ **Расскажите немного о себе и своих качествах:**"
+    await message.answer(text, parse_mode="Markdown", reply_markup=control_kb())
+
+@dp.message(Form.why_me_or_about)
+async def process_final(message: types.Message, state: FSMContext):
+    await state.update_data(why_me_or_about=message.text)
+    data = await state.get_data()
+    await state.clear()
+    
+    await message.answer("🚀 **Ваша заявка успешно отправлена! Ожидайте вердикта администрации в ЛС.**", parse_mode="Markdown")
+    
+    # Формируем красивый текст для админов
+    role_title = "ХЕЛПЕР" if data['role'] == 'helper' else "АГЕНТ ПОДДЕРЖКИ"
+    admin_text = (
+        f"📥 **НОВАЯ ЗАЯВКА: {role_title}**\n\n"
+        f"👤 **Кандидат:** {message.from_user.mention} (ID: `{message.from_user.id}`)\n"
+        f"📝 **Имя и возраст:** {data['name_age']}\n"
+        f"🔹 **Ник / Время в ДС:** {data['param_1']}\n"
+        f"🔹 **Онлайн / Знание правил:** {data['param_2']}\n"
+        f"💼 **Опыт работы:** {data['param_3']}\n"
+        f"❓ **О себе / Почему он:** {data['why_me_or_about']}"
+    )
+    
+    await bot.send_message(
+        chat_id=ADMIN_CHAT_ID, 
+        text=admin_text, 
+        parse_mode="Markdown", 
+        reply_markup=admin_decision_kb(message.from_user.id, data['role'])
+    )
+
+# --- ОБРАБОТКА РЕШЕНИЙ АДМИНИСТРАЦИИ ---
+@dp.callback_query(AdminDecision.filter())
+async def handle_admin_decision(callback: types.CallbackQuery, callback_data: AdminDecision):
+    user_id = callback_data.user_id
+    role_name = "Хелпера" if callback_data.role == "helper" else "Агента Поддержки"
+    
+    # Обновляем сообщение в админ-чате, чтобы убрать кнопки и зафиксировать результат
+    old_text = callback.message.text
+    
+    if callback_data.action == "accept":
+        new_text = f"✅ **ЗАЯВКА ОДОБРЕНА** администратором @{callback.from_user.username}\n\n{old_text}"
+        user_text = f"🎉 Поздравляем! Ваша заявка на пост **{role_name}** проекта BEST RUSSIA одобрена!\nС вами свяжется администратор."
+    else:
+        new_text = f"❌ **ЗАЯВКА ОТКЛОНЕНА** администратором @{callback.from_user.username}\n\n{old_text}"
+        user_text = f"😔 К сожалению, ваша заявка на пост **{role_name}** проекта BEST RUSSIA была отклонена."
+
+    try:
+        # Отправляем вердикт пользователю в ЛС
+        await bot.send_message(chat_id=user_id, text=user_text)
+    except Exception:
+        new_text += "\n\n⚠️ *Бот не смог написать пользователю в ЛС (заблокирован или закрыт профиль)*"
+
+    await callback.message.edit_text(text=new_text, reply_markup=None)
+    await callback.answer()
+
+async def main():
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
